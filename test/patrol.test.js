@@ -2,7 +2,22 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createPatrolRoute, runPatrol } = require('../lib/patrol');
+const { createPatrolRoute, isPatrolEnabled, runPatrol } = require('../lib/patrol');
+
+test('patrol is disabled in AI mode even when circle walking is configured', () => {
+  assert.equal(isPatrolEnabled({
+    ai: { enabled: true },
+    movement: { enabled: true, 'circle-walk': { enabled: true } }
+  }), false);
+  assert.equal(isPatrolEnabled({
+    ai: { enabled: false },
+    movement: { enabled: true, 'circle-walk': { enabled: true } }
+  }), true);
+  assert.equal(isPatrolEnabled({
+    ai: { enabled: false },
+    movement: { enabled: false, 'circle-walk': { enabled: true } }
+  }), false);
+});
 
 test('patrol route uses a fixed anchor and ends back at that anchor', () => {
   const anchor = { x: 12, y: 64, z: -5 };

@@ -5,14 +5,14 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const mineflayer = require('mineflayer');
 const { Movements, pathfinder, goals } = require('mineflayer-pathfinder');
-const { GoalBlock } = goals;
+const { GoalBlock, GoalNearXZ } = goals;
 const { AIAgent } = require('./lib/ai-agent');
 const {
   createTrustedChatMemoryNote,
   isAIChatAuthorized,
   parseAIChatCommand
 } = require('./lib/ai-chat');
-const { runPatrol } = require('./lib/patrol');
+const { isPatrolEnabled, runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
 const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
@@ -1044,7 +1044,7 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
   }
 
   if (config.movement?.enabled !== false) {
-    if (config.movement?.['circle-walk']?.enabled) {
+    if (isPatrolEnabled(config)) {
       startCircleWalk(bot, defaultMove);
     }
 
@@ -1095,6 +1095,7 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
 }
 
 function startCircleWalk(currentBot, defaultMove) {
+  if (!isPatrolEnabled(config)) return;
   const patrolBot = currentBot;
   const anchor = patrolBot.entity.position.floored();
   const settings = config.movement['circle-walk'];
@@ -1111,7 +1112,7 @@ function startCircleWalk(currentBot, defaultMove) {
     shouldStop: () => stopped || bot !== patrolBot || !botState.connected,
     shouldPause: () => manualControls.size > 0 ||
       (config.ai?.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)),
-    goto: point => patrolBot.pathfinder.goto(new GoalBlock(point.x, point.y, point.z)),
+    goto: point => patrolBot.pathfinder.goto(new GoalNearXZ(point.x, point.z, 2)),
     onError: (error, point) => {
       console.log(`[Patrol] Could not reach waypoint (${point.x}, ${point.y}, ${point.z}): ${error.message}`);
     }

@@ -27,6 +27,8 @@ test('AI chat command parser accepts slash and chat-prefix forms', () => {
 
 test('AI chat authorization matches configured usernames without case sensitivity', () => {
   assert.equal(isAIChatAuthorized('Virgo', ['virgo']), true);
+  assert.equal(isAIChatAuthorized(' virgo ', [' Virgo ']), true);
+  assert.equal(isAIChatAuthorized(' ', ['virgo']), false);
   assert.equal(isAIChatAuthorized('OtherPlayer', ['virgo']), false);
   assert.equal(isAIChatAuthorized('Virgo', null), false);
 });
