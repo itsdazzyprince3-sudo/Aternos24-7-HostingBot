@@ -38,13 +38,14 @@ large model planning every step.
 
 ### AI chat and survival behavior
 
-Enable `ai.enabled` in your private `settings.json`, then add your Minecraft
-username to `chat.tpWhitelist` or `ai.allowedUsers`. The active configuration
-must be restarted before it takes effect. Startup logs list the trusted names.
-Usernames are matched without case sensitivity. Use `!ai help` for commands.
-Examples: `!ai hello`, `!ai come`, `!ai follow me`, `!ai mine 8 stone`,
-`!ai craft wooden_pickaxe`, `!ai grind wood`, `!ai status`, `!ai teach keep
-three logs`, and `!ai stop`.
+Enable `ai.enabled` in your private `settings.json`, then add trusted Minecraft
+usernames to `ai.allowedUsers` or `chat.tpWhitelist`. The bot combines both
+lists. Restart the active process after editing settings. Startup logs show the
+trusted names. Usernames are matched without case sensitivity. Use `!ai help`
+for commands. Examples: `!ai hello`, `!ai come`, `!ai follow me`, `!ai mine 8
+stone`, `!ai craft wooden_pickaxe`, `!ai grind wood`, `!ai status`, `!ai teach
+keep three logs`, and `!ai stop`.
+
 
 Virgo can inspect nearby blocks, entities, players, position, health, food, and
 inventory; navigate to visible players; gather resources; craft and smelt items;

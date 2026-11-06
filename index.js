@@ -9,6 +9,7 @@ const { GoalBlock, GoalNearXZ } = goals;
 const { AIAgent } = require('./lib/ai-agent');
 const {
   createTrustedChatMemoryNote,
+  getAIChatAllowedUsers,
   isAIChatAuthorized,
   parseAIChatCommand
 } = require('./lib/ai-chat');
@@ -956,8 +957,14 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
   console.log('[Modules] Initializing...');
 
   if (config.ai?.enabled || config.modules.chat) chatModule(bot);
+  const aiAllowedUsers = getAIChatAllowedUsers(config.ai, config.chat);
+  if (config.ai?.enabled) {
+    console.log(`[AI Chat] Commands enabled; trusted users: ${aiAllowedUsers.join(', ') || '(none configured)'}.`);
+  } else {
+    console.log('[AI Chat] AI commands disabled; set ai.enabled=true in settings.json.');
+  }
   if (config.ai?.enabled && config.ai.learnFromAllowlistedChat && config.ai.memory !== false) {
-    console.log('[AI] Local chat learning is enabled for players in chat.tpWhitelist.');
+    console.log('[AI] Local chat learning is enabled for configured AI chat users.');
   }
 
   if (config.utils['auto-auth']?.enabled && authPassword) {
@@ -1324,7 +1331,7 @@ function bedModule(bot, mcData) {
 
 function chatModule(bot) {
 
-  const tpWhitelist = config.chat?.tpWhitelist || [];
+  const aiAllowedUsers = getAIChatAllowedUsers(config.ai, config.chat);
 
   bot.on('chat', (username, message) => {
     if (!bot || username === bot.username) return;
@@ -1332,7 +1339,7 @@ function chatModule(bot) {
     try {
       const aiCommand = parseAIChatCommand(message);
       if (config.ai?.enabled && config.ai.memory !== false && config.ai.learnFromAllowlistedChat) {
-        const note = createTrustedChatMemoryNote(username, message, tpWhitelist);
+        const note = createTrustedChatMemoryNote(username, message, aiAllowedUsers);
         if (note && aiCommand?.type !== 'teach') {
           try {
             aiAgent.addMemoryNote(note);
@@ -1343,7 +1350,11 @@ function chatModule(bot) {
       }
 
       if (aiCommand) {
-        if (!isAIChatAuthorized(username, tpWhitelist)) {
+        if (!config.ai?.enabled) {
+          sendAIChatMessage('AI mode is disabled on this server. Set ai.enabled to true in settings.json.');
+          return;
+        }
+        if (!isAIChatAuthorized(username, aiAllowedUsers)) {
           console.log(`[AI Chat] Ignored command from untrusted user: ${username}`);
           return;
         }
