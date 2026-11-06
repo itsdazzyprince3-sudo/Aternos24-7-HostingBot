@@ -258,6 +258,24 @@ PowerShell may block the `npm.ps1` wrapper due to the system execution policy.
 Using `npm.cmd` avoids changing that policy. You can also use `node index.js`
 after installing dependencies.
 
+To start the bot in a separate PowerShell window and open its dashboard
+automatically, run this from the repository folder:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-bot-new-window.ps1
+```
+
+For diagnosing protocol disconnects, add `-ProtocolDebug`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-bot-new-window.ps1 -ProtocolDebug
+```
+
+The new bot window then includes `frameHex` for failed packets up to 512 bytes.
+The browser opens the dashboard, where the AI instruction box is available
+when `ai.enabled` is `true`. Set `AI_API_KEY` and `DASHBOARD_TOKEN` in the
+PowerShell session before running the launcher if AI task control is needed.
+
 ### Windows Command Prompt
 
 Install Node.js LTS, open Command Prompt in the repository folder, and run:
