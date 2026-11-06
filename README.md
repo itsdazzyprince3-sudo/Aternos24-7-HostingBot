@@ -47,20 +47,38 @@ stone`, `!ai craft wooden_pickaxe`, `!ai grind wood`, `!ai status`, `!ai teach
 keep three logs`, and `!ai stop`.
 
 
+With `ai.respondToTrustedChat` enabled, plain messages from names in
+`ai.allowedUsers` are sent to the configured AI provider. Colloquial variants
+such as “step over to me” and “break eight stone blocks” are accepted; recognized
+actions use deterministic skills, while open-ended requests use the reasoning
+model. This may use API quota, so the example keeps the feature disabled by
+default and it should only be enabled for trusted players.
+
 Virgo can inspect nearby blocks, entities, players, position, health, food, and
 inventory; navigate to visible players; gather resources; craft and smelt items;
 eat, farm, build a basic shelter, sleep, explore, and store or deliver items.
 It reasons from this structured game state and does not capture or render a
 first-person screen. It fights nearby hostile mobs when instructed or while
 surviving, retreats from creepers and low health, and does not attack players.
+Sleep is attempted only at night with a nearby or carried bed and no detected
+nearby hostile. Colored bed items are recognized. Death location and dimension
+are saved for recovery; recovery is refused across dimensions. Ordinary
+Mineflayer state does not expose a complete world seed or ungenerated structures,
+so structure-finding claims must be limited to loaded nearby blocks. General
+anvil repair, arbitrary-coordinate block placement, and chest withdrawal are not
+currently exposed as safe actions; chest deposits and preset shelter/farm
+placement are supported.
 
 `ai.autonomous.enabled` opts into local grinding. With
 `ai.autonomous.mode: "local"`, Virgo chooses short goals from health, hunger,
 inventory, nearby threats, and stored skill history without spending cloud API
 quota; `!ai grind wood` selects a resource goal. Use `!ai pause`, `!ai resume`,
 and `!ai stop` to control it. The local interval is configurable through
-`ai.autonomous.intervalMs`. Progress messages are throttled and can be disabled
-with `ai.autonomous.chatProgress`.
+`ai.autonomous.intervalMs`. Autonomous logging/mining is capped to short batches
+and pauses near hostiles, critical health, nearby hazards, or targets with large
+vertical gaps. At night, the planner prefers a safe bed; if none is available it
+can choose shelter work. Progress messages can be disabled with
+`ai.autonomous.chatProgress`.
 
 Local web lookup for Ollama is opt-in: set `ai.search.enabled` to `true` and
 provide `TAVILY_API_KEY` in `.env`. Queries go to Tavily only for explicit web
@@ -75,7 +93,9 @@ Local memory is stored in ignored `data/ai-memory.json`. Version 2 records
 notes, facts, waypoints, player notes, skill outcomes, and counters; existing
 notes-only files remain readable. `ai.learnFromAllowlistedChat` stores chat
 context from allowlisted players, so enable it only when those players know
-messages are retained. This is local memory, not model-weight training.
+messages are retained. This is local memory, not model-weight training. When a
+cloud provider is configured, saved memory summaries may be included in its
+prompt; do not store secrets or private information in learned chat.
 
 ---
 

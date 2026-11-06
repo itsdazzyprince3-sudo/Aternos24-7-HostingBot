@@ -7,7 +7,8 @@ const {
   createTrustedChatMemoryNote,
   getAIChatAllowedUsers,
   isAIChatAuthorized,
-  parseAIChatCommand
+  parseAIChatCommand,
+  shouldAutoRespondToChat
 } = require('../lib/ai-chat');
 
 test('AI chat command parser accepts slash and chat-prefix forms', () => {
@@ -43,6 +44,15 @@ test('AI command allowlist merges AI-specific and existing trusted chat users', 
     ['virgo', 'admin', 'owner']
   );
   assert.deepEqual(getAIChatAllowedUsers({ allowedUsers: 'virgo' }, null), []);
+});
+
+test('automatic AI chat replies require opt-in and an AI-specific allowed user', () => {
+  const config = { enabled: true, respondToTrustedChat: true, allowedUsers: ['commotozze'] };
+  assert.equal(shouldAutoRespondToChat('commotozze', config), true);
+  assert.equal(shouldAutoRespondToChat('other', config), false);
+  assert.equal(shouldAutoRespondToChat('Virgo', { ...config, allowedUsers: [], tpWhitelist: ['Virgo'] }), false);
+  assert.equal(shouldAutoRespondToChat('commotozze', { ...config, enabled: false }), false);
+  assert.equal(shouldAutoRespondToChat('commotozze', { ...config, respondToTrustedChat: false }), false);
 });
 
 test('trusted chat memory includes only allowlisted players and bounds note length', () => {

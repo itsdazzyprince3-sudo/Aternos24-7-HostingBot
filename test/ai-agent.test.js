@@ -23,6 +23,57 @@ test('AI instructions are validated before starting', () => {
   assert.throws(() => agent.start('mine stone'), /disabled/);
 });
 
+test('known polite action paraphrases route locally without requiring a model API key', () => {
+  const agent = new AIAgent({
+    config: { enabled: true, provider: 'openai' },
+    getBot: () => ({}),
+    isConnected: () => true
+  });
+  let receivedInstruction = null;
+  agent.runLocal = (_runId, instruction) => { receivedInstruction = instruction; };
+
+  assert.doesNotThrow(() => agent.start('Could you please step over to me?', 'commotozze'));
+  assert.equal(agent.activeProvider, 'local');
+  assert.equal(receivedInstruction, 'Could you please step over to me?');
+  assert.match(agent.getStatus().message, /Understanding your request/);
+  agent.stop();
+});
+
+test('death locations persist with dimension and are restored without crossing dimensions', async () => {
+  let saved = null;
+  const memory = {
+    ...noOpMemory,
+    getFact: key => key === 'deathRecovery' ? saved : null,
+    setFact: (key, value) => { if (key === 'deathRecovery') saved = value; },
+    deleteFact: key => { if (key === 'deathRecovery') saved = null; }
+  };
+  const bot = {
+    entity: { position: new Vec3(4, 65, -2) },
+    inventory: { items: () => [{ name: 'oak_log', count: 3 }] },
+    game: { dimension: 'overworld' }
+  };
+  const first = new AIAgent({
+    config: { enabled: true, memory: true },
+    memory,
+    getBot: () => bot,
+    isConnected: () => true
+  });
+  assert.equal(first.recordDeath(), true);
+  assert.equal(saved.dimension, 'overworld');
+  assert.equal(saved.inventory.oak_log, 3);
+
+  bot.game.dimension = 'the_nether';
+  const restarted = new AIAgent({
+    config: { enabled: true, memory: true },
+    memory,
+    getBot: () => bot,
+    isConnected: () => true
+  });
+  assert.equal(restarted.hasDeathRecovery(), true);
+  await assert.rejects(restarted.recoverDroppedItems(), /currently in the_nether/);
+  assert.equal(restarted.hasDeathRecovery(), true);
+});
+
 test('autonomous gathering is opt-in and can be paused and resumed', async () => {
   const agent = new AIAgent({
     config: { enabled: true, autonomous: { enabled: false } },
@@ -190,7 +241,7 @@ test('AI task uses the configured model API and can finish a task', async () => 
   });
 
   try {
-    agent.start('Mine stone.');
+    agent.start('Mine stone.', null, { forceModel: true });
     for (let attempt = 0; attempt < 20 && agent.getStatus().status === 'working'; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
@@ -200,8 +251,9 @@ test('AI task uses the configured model API and can finish a task', async () => 
     assert.equal(request.options.headers.Authorization, 'Bearer test-key');
     const body = JSON.parse(request.options.body);
     assert.equal(body.model, 'test-model');
-    assert.equal(body.messages[0].role, 'system');
-    assert.match(body.messages[0].content, /Mine stone\./);
+  assert.equal(body.messages[0].role, 'system');
+  assert.match(body.messages[0].content, /Mine stone\./);
+    assert.match(body.messages[0].content, /Reason privately.*Verify the structured game state/s);
   } finally {
     if (previousKey === undefined) delete process.env.AI_API_KEY;
     else process.env.AI_API_KEY = previousKey;
@@ -258,7 +310,7 @@ test('AI task uses Gemini Interactions with tool results and chained interaction
     : { finished: true, message: 'Done.' };
 
   try {
-    agent.start('Gather wood.');
+    agent.start('Gather wood.', null, { forceModel: true });
     for (let attempt = 0; attempt < 30 && agent.getStatus().status === 'working'; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
@@ -591,7 +643,7 @@ test('AI task reports model API errors rather than claiming success', async () =
   });
 
   try {
-    agent.start('Gather wood.');
+    agent.start('Gather wood.', null, { forceModel: true });
     for (let attempt = 0; attempt < 20 && agent.getStatus().status === 'working'; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }

@@ -16,7 +16,8 @@ test('combat skill ignores players and only selects known hostile mobs', async (
     username: 'commotozze',
     entity: { position: new Vec3(0, 64, 0) },
     entities: {
-      player: { id: 1, type: 'player', name: 'virgo', position: new Vec3(1, 64, 0) }
+      player: { id: 1, type: 'player', name: 'virgo', position: new Vec3(1, 64, 0) },
+      zombiePlayer: { id: 2, type: 'player', name: 'zombie', position: new Vec3(2, 64, 0) }
     },
     inventory: { items: () => [] },
     attack: entity => attacks.push(entity)
@@ -24,6 +25,35 @@ test('combat skill ignores players and only selects known hostile mobs', async (
   const result = await makeSkills(bot).attackNearest('virgo');
   assert.deepEqual(result, { message: 'No hostile mobs nearby.' });
   assert.deepEqual(attacks, []);
+  assert.deepEqual(await makeSkills(bot).attackNearest('zombie'), { message: 'No hostile mobs nearby.' });
+  await assert.rejects(makeSkills(bot).attackEntity(bot.entities.zombiePlayer), /never a player/i);
+  assert.deepEqual(attacks, []);
+});
+
+test('bed inventory recognizes colored variants and sleep refuses unsafe or unavailable conditions', async () => {
+  const bedItem = { name: 'white_bed', count: 1 };
+  const baseBot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0), equipment: [] },
+    inventory: { items: () => [bedItem] },
+    findBlock: () => null,
+    entities: {},
+    health: 20,
+    food: 20,
+    time: { isDay: false }
+  };
+  const skills = makeSkills(baseBot);
+  assert.equal(skills.countItem('bed'), 1);
+  assert.equal(skills.findInventoryItem('bed'), bedItem);
+
+  const unsafeBot = {
+    ...baseBot,
+    entities: { zombie: { id: 3, type: 'mob', name: 'zombie', position: new Vec3(3, 64, 0) } }
+  };
+  await assert.rejects(makeSkills(unsafeBot).sleep(), /while a zombie is within 8 blocks/i);
+
+  const noBedBot = { ...baseBot, inventory: { items: () => [] }, entities: {} };
+  await assert.rejects(makeSkills(noBedBot).sleep(), /No bed is nearby or in my inventory/i);
 });
 
 

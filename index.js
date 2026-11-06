@@ -11,7 +11,8 @@ const {
   createTrustedChatMemoryNote,
   getAIChatAllowedUsers,
   isAIChatAuthorized,
-  parseAIChatCommand
+  parseAIChatCommand,
+  shouldAutoRespondToChat
 } = require('./lib/ai-chat');
 const { isPatrolEnabled, runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
@@ -1358,6 +1359,7 @@ function bedModule(bot, mcData) {
 function chatModule(bot) {
 
   const aiAllowedUsers = getAIChatAllowedUsers(config.ai, config.chat);
+  const lastAutoResponseAt = new Map();
 
   bot.on('chat', (username, message) => {
     if (!bot || username === bot.username) return;
@@ -1423,6 +1425,29 @@ function chatModule(bot) {
 
       if (config.discord?.enabled && config.discord?.events?.chat) {
         sendDiscordWebhook(`${username}: ${message}`, 0x7289da);
+      }
+
+      const plainMessage = String(message || '').trim();
+      if (shouldAutoRespondToChat(username, config.ai) && plainMessage && !/^[!/]/.test(plainMessage)) {
+        const now = Date.now();
+        const last = lastAutoResponseAt.get(username.toLowerCase()) || 0;
+        if (now - last < 3000) {
+          sendAIChatMessage(`${username}: Give me a moment between requests.`);
+          return;
+        }
+        lastAutoResponseAt.set(username.toLowerCase(), now);
+        const isControlRequest = /^(?:please\s+)?(?:stop|halt|cancel|abort|enough|pause|resume|continue|keep going)\b/i.test(plainMessage);
+        if (['working', 'paused'].includes(aiAgent.getStatus().status) && !isControlRequest) {
+          sendAIChatMessage(`${username}: I'm still working on the current task. Use !ai stop if you want me to switch.`);
+          return;
+        }
+        try {
+          aiAgent.start(plainMessage, username);
+          sendAIChatMessage(`${username}: Understood. I'll answer or act on that now.`);
+        } catch (error) {
+          sendAIChatMessage(`${username}: ${error.message}`);
+        }
+        return;
       }
 
       if (config.chat?.respond) {

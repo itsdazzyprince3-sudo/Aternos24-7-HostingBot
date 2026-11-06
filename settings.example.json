@@ -68,6 +68,7 @@
   "ai": {
     "enabled": false,
     "allowedUsers": [],
+    "respondToTrustedChat": false,
     "memory": true,
     "memoryMaxNotes": 100,
     "learnFromAllowlistedChat": false,
