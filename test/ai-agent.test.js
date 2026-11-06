@@ -968,15 +968,65 @@ test('Lunax provider sends OpenAI-compatible chat-completions requests', async (
         const body = JSON.parse(options.body);
         assert.equal(body.model, 'lunax-chat');
         assert.equal(body.messages[0].content, 'Hello');
-        assert.ok(Array.isArray(body.tools));
-        assert.equal(body.parallel_tool_calls, undefined);
+        assert.equal(body.tools, undefined);
+        assert.equal(body.tool_choice, undefined);
         assert.equal(body.max_tokens, 512);
+        assert.equal(body.stream, false);
         return { ok: true, json: async () => ({ choices: [{ message: { content: 'Hi!' } }] }) };
       }
     });
     assert.equal(agent.resolveProvider(), 'lunax');
     const response = await agent.requestModel([{ role: 'user', content: 'Hello' }]);
     assert.equal(response.choices[0].message.content, 'Hi!');
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Lunax JSON actions run through local tools and receive actual results', async () => {
+  const keys = ['LUNAX_API_KEY', 'LUNAX_API_URL', 'LUNAX_MODEL', 'AI_PROVIDER'];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  process.env.LUNAX_API_KEY = 'test-lunax-key';
+  process.env.AI_PROVIDER = 'lunax';
+  delete process.env.LUNAX_API_URL;
+  delete process.env.LUNAX_MODEL;
+  try {
+    const requests = [];
+    const responses = [
+      { choices: [{ message: { content: '{"action":"observe","arguments":{}}' } }] },
+      { choices: [{ message: { content: '{"action":"finish_task","arguments":{"message":"Done after checking state."}}' } }] }
+    ];
+    const agent = new AIAgent({
+      config: { enabled: true, provider: 'lunax' },
+      getBot: () => ({}),
+      isConnected: () => true,
+      fetchImpl: async (url, options) => {
+        const body = JSON.parse(options.body);
+        assert.equal(url, 'https://lunax.co/api/v1/chat/completions');
+        assert.equal(body.tools, undefined);
+        requests.push(body);
+        return { ok: true, json: async () => responses.shift() };
+      }
+    });
+    const executed = [];
+    agent.executeTool = async (name, rawArgs) => {
+      executed.push({ name, args: JSON.parse(rawArgs) });
+      return name === 'observe'
+        ? { health: 20, inventory: [{ name: 'oak_log', count: 2 }] }
+        : { finished: true, message: 'Done after checking state.' };
+    };
+    agent.start('Inspect then finish.');
+    for (let attempt = 0; attempt < 30 && agent.getStatus().status === 'working'; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.equal(agent.getStatus().status, 'completed');
+    assert.equal(agent.getStatus().message, 'Done after checking state.');
+    assert.deepEqual(executed.map(call => call.name), ['observe', 'finish_task']);
+    assert.match(requests[0].messages[0].content, /Available local actions and argument schemas/);
+    assert.match(requests[1].messages.at(-1).content, /Actual result from observe.*oak_log/);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

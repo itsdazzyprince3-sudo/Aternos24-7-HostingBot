@@ -48,6 +48,22 @@ test('known Minecraft questions use concise deterministic answers', () => {
 });
 
 
+test('autonomous planner explores after a recent unreachable wood route', () => {
+  const memory = { getSkill: name => name === 'goal:gatherWood' ? {
+    failures: 2,
+    lastDetail: 'I could not find reachable logs nearby, even after scouting.',
+    lastUsedAt: new Date().toISOString()
+  } : null };
+  const goal = chooseGoal({
+    health: 20,
+    food: 20,
+    inventory: {},
+    nearbyBlocks: []
+  }, memory);
+  assert.equal(goal.skill, 'explore');
+  assert.match(goal.reason, /wood route failed recently/i);
+});
+
 test('autonomous planner learns to avoid a recently unreachable mining route', () => {
   const memory = { getSkill: name => name === 'goal:mine' ? {
     failures: 1,

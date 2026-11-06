@@ -275,8 +275,9 @@ provider or dashboard secrets in `settings.json` or commit them:
 
 To use Lunax, add `LUNAX_API_KEY` to `.env`; `AI_PROVIDER=auto` selects it
 when present and uses `lunax-chat` at `https://lunax.co/api/v1/chat/completions`.
-This follows the provider example; verify current quotas and tool-calling support with
-Lunax before relying on it.
+The adapter sends a messages-only request and asks for one JSON action or answer per
+turn. The bot validates each action locally before execution. Verify the account
+quota and model availability with Lunax before relying on the provider.
 
 To use Meta reasoning, add `MODEL_API_KEY` to `.env`; `AI_PROVIDER=auto` selects
 Muse Wonder when that key is present and no Lunax key is set. The default model is `muse-wonder-1.0`; set
@@ -289,8 +290,9 @@ auto mode selects Meta. You can explicitly set `AI_PROVIDER=openai` and
 `AI_MODEL=gpt-5.5` as well. OpenAI reasoning effort defaults to `low`; set
 `OPENAI_REASONING_EFFORT=medium` or `high` for more planning at the cost of slower
 responses and API usage. `AI_API_URL` can point to another OpenAI-compatible
-chat-completions service. Cloud calls may incur provider charges. The configured
-provider must support function/tool calling. The model plans bounded actions;
+chat-completions service. Cloud calls may incur provider charges. Providers using
+native tools rely on function calling; Lunax uses the bounded JSON action protocol.
+All model-selected actions pass through local validation;
 all game actions still pass through the bot's local skills, allowlist, and limits.
 The bot uses the model to inspect inventory, gather blocks, craft items, and
 navigate nearby. AI mode does not
