@@ -51,6 +51,42 @@ test('autonomous gathering is opt-in and can be paused and resumed', async () =>
   }
 });
 
+test('local autonomous mode uses the local planner even when a cloud API key is configured', async () => {
+  const previous = {
+    apiKey: process.env.AI_API_KEY,
+    provider: process.env.AI_PROVIDER
+  };
+  process.env.AI_API_KEY = 'test-key';
+  delete process.env.AI_PROVIDER;
+  const agent = new AIAgent({
+    config: {
+      enabled: true,
+      provider: 'auto',
+      autonomous: { enabled: true, mode: 'local', intervalMs: 6000 }
+    },
+    getBot: () => ({}),
+    isConnected: () => true
+  });
+  let cycles = 0;
+  agent.runAutonomyCycle = async () => { cycles += 1; };
+
+  try {
+    agent.startAutonomous();
+    assert.equal(cycles, 1);
+    assert.equal(agent.autonomyActive, true);
+
+    agent.scheduleAutonomousCycle(1);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(cycles, 2);
+  } finally {
+    agent.stop();
+    if (previous.apiKey === undefined) delete process.env.AI_API_KEY;
+    else process.env.AI_API_KEY = previous.apiKey;
+    if (previous.provider === undefined) delete process.env.AI_PROVIDER;
+    else process.env.AI_PROVIDER = previous.provider;
+  }
+});
+
 test('autonomous tasks cannot use non-gathering tools or mine unapproved blocks', async () => {
   const agent = new AIAgent({
     config: { enabled: true },

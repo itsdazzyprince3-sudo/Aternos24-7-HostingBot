@@ -54,9 +54,10 @@ It reasons from this structured game state and does not capture or render a
 first-person screen. It fights nearby hostile mobs when instructed or while
 surviving, retreats from creepers and low health, and does not attack players.
 
-`ai.autonomous.enabled` opts into local grinding. In `auto` mode Virgo chooses
-short goals from health, hunger, inventory, nearby threats, and stored skill
-history; `!ai grind wood` selects a resource goal. Use `!ai pause`, `!ai resume`,
+`ai.autonomous.enabled` opts into local grinding. With
+`ai.autonomous.mode: "local"`, Virgo chooses short goals from health, hunger,
+inventory, nearby threats, and stored skill history without spending cloud API
+quota; `!ai grind wood` selects a resource goal. Use `!ai pause`, `!ai resume`,
 and `!ai stop` to control it. The local interval is configurable through
 `ai.autonomous.intervalMs`. Progress messages are throttled and can be disabled
 with `ai.autonomous.chatProgress`.
