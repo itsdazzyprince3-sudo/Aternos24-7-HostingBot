@@ -4,7 +4,7 @@
   "description": "Robust AFK bot for Minecraft servers with infinite uptime.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node scripts/supervise-bot.js",
     "test": "node scripts/run-tests.js"
   },
   "author": "Lamgerr",

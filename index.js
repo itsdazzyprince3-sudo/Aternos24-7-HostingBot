@@ -5,8 +5,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const mineflayer = require('mineflayer');
 const { Movements, pathfinder, goals } = require('mineflayer-pathfinder');
-const { GoalBlock } = goals;
+const { GoalBlock, GoalNear } = goals;
 const { AIAgent } = require('./lib/ai-agent');
+const { createPatrolRoute } = require('./lib/patrol');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
 if (!fs.existsSync(settingsPath)) {
   throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
@@ -847,28 +848,43 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
   console.log('[Modules] All modules initialized.');
 }
 
-function startCircleWalk(bot, defaultMove) {
-  const radius = config.movement['circle-walk'].radius;
-  let angle = 0;
-  let lastPathTime = 0;
+function startCircleWalk(currentBot, defaultMove) {
+  const patrolBot = currentBot;
+  const anchor = patrolBot.entity.position.floored();
+  const settings = config.movement['circle-walk'];
+  const route = createPatrolRoute(anchor, settings.radius);
+  const interval = Math.max(500, Number(settings.speed) || 3000);
+  let stopped = false;
 
-  addInterval(() => {
-    if (!bot || !botState.connected) return;
-    const now = Date.now();
-    if (now - lastPathTime < 2000) return;
-    lastPathTime = now;
-    try {
-      const x = bot.entity.position.x + Math.cos(angle) * radius;
-      const z = bot.entity.position.z + Math.sin(angle) * radius;
-      bot.pathfinder.setMovements(defaultMove);
-      bot.pathfinder.setGoal(new GoalBlock(Math.floor(x), Math.floor(bot.entity.position.y), Math.floor(z)));
+  patrolBot.once('end', () => { stopped = true; });
+  patrolBot.pathfinder.setMovements(defaultMove);
 
-      angle = (angle + Math.PI / 4) % (Math.PI * 2);
-      botState.lastActivity = Date.now();
-    } catch (e) {
-      console.log('[CircleWalk] Error:', e.message);
+  const runPatrol = async () => {
+    while (!stopped && bot === patrolBot && botState.connected) {
+      if (config.ai.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)) {
+        await new Promise(resolve => setTimeout(resolve, interval));
+        continue;
+      }
+
+      for (const point of route) {
+        if (stopped || bot !== patrolBot || !botState.connected) return;
+        if (config.ai.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)) break;
+        try {
+          await patrolBot.pathfinder.goto(new GoalNear(point.x, point.y, point.z, 1));
+          botState.lastActivity = Date.now();
+        } catch (error) {
+          if (!stopped && bot === patrolBot && botState.connected) {
+            console.log(`[Patrol] Could not reach waypoint (${point.x}, ${point.y}, ${point.z}): ${error.message}`);
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, interval));
+      }
     }
-  }, config.movement['circle-walk'].speed);
+  };
+
+  runPatrol().catch(error => {
+    if (!stopped) console.log('[Patrol] Error:', error.message);
+  });
 }
 
 function startRandomJump(bot) {

@@ -174,6 +174,10 @@ tool/function calling. The bot uses the model to plan bounded actions, inspect
 inventory, gather blocks, craft items, and navigate nearby. AI mode does not
 run random movement, combat, or unsolicited chat modules. It is opt-in; with
 `ai.enabled` set to `false`, the existing AFK behavior remains in use.
+When AFK movement is enabled, the patrol uses pathfinding to visit fixed
+waypoints and returns to its starting position at the end of each lap. It does
+not dig blocks to clear a route. Server-side AFK policies or shutdowns can
+still disconnect the bot.
 
 Add your Minecraft username to the tp whitelist so only you can move the bot:
 
@@ -543,8 +547,9 @@ restrictions.
 | server.proxy-version-fallback | Optional fallback for an unsupported target version |
 | utils.auto-auth.enabled | Turn on if the server uses AuthMe or similar |
 | utils.chat-messages.repeat-delay | Seconds between periodic chat messages |
-| movement.circle-walk.enabled | Bot walks in a circle to appear human |
-| movement.circle-walk.radius | How wide the circle is in blocks |
+| movement.circle-walk.enabled | Repeats a patrol around the position where the bot spawned |
+| movement.circle-walk.radius | Maximum patrol distance from the spawn position, in blocks |
+| movement.circle-walk.speed | Pause in milliseconds between patrol waypoints |
 | modules.combat | Bot attacks nearby mobs |
 | modules.avoidMobs | Bot runs from mobs (turn off if combat is on) |
 | ai.enabled | Enable instruction-driven AI mode instead of AFK modules |
