@@ -28,11 +28,10 @@ Manual input pauses the patrol until all controls are released. Held inputs
 automatically release if the dashboard stops sending its control heartbeat.
 
 Local model API and dashboard secrets belong in the ignored `.env` file. The
-`npm start` script loads it automatically. Set `AI_API_KEY`, `AI_API_URL`, and
-`AI_MODEL` using your provider's official instructions. OpenAI-compatible
-chat-completions endpoints and Google's Gemini Interactions endpoint are
-supported; Gemini uses the `x-goog-api-key` header and its native function-call
-steps. For Gemini, set `AI_API_URL` to
+`npm start` script loads it automatically. Set `AI_API_KEY` in `.env`; the
+default model is `gemini-3.5-flash-lite` and the default endpoint is Google's
+Gemini Interactions API. Gemini uses the `x-goog-api-key` header and its native function-call
+steps. Set `AI_API_URL` to
 `https://generativelanguage.googleapis.com/v1beta/interactions`. Do not paste
 API keys into chat or commit `.env`. Revoke and replace any key that was
 previously exposed. Gemini API quotas and free-tier availability depend on
@@ -66,10 +65,9 @@ players in `chat.tpWhitelist` is saved as local context; keep this enabled only
 if those players know their messages are retained. The model uses this memory
 to recognize preferences, not as instructions that override the current task.
 This is local prompt memory, not model-weight training.
-On the Gemini Interactions endpoint, `ai.webSearch` enables Google's built-in
-Search grounding for up-to-date web questions. Grounded answers include source
-domains in chat. Search availability and quotas depend on Google's account and
-model limits; this feature is not used with OpenAI-compatible endpoints.
+`ai.webSearch` enables Google's built-in Search grounding for up-to-date web
+questions. Grounded answers include source domains in chat. Search availability
+and quotas depend on Google's account and model limits.
 When AI mode is enabled, the bot can defend itself from a fixed list of known
 hostile mobs, never attacks players, and retreats from nearby hostiles at
 8 health or less. After death, it records the last position and tries to
@@ -244,8 +242,8 @@ and fill in the required fields. The runtime intentionally reads
 },
 "ai": {
   "enabled": true,
-  "model": "gpt-4o-mini",
-  "apiUrl": "https://api.openai.com/v1/chat/completions"
+  "model": "gemini-3.5-flash-lite",
+  "apiUrl": "https://generativelanguage.googleapis.com/v1beta/interactions"
 }
 ```
 
@@ -260,8 +258,8 @@ provider or dashboard secrets in `settings.json` or commit them:
 | Variable | What it does |
 |----------|--------------|
 | `AI_API_KEY` | API key for your model provider |
-| `AI_MODEL` | Optional model name; overrides `ai.model` |
-| `AI_API_URL` | Provider endpoint: OpenAI-compatible chat completions or Google Gemini Interactions |
+| `AI_MODEL` | Optional override; defaults to `gemini-3.5-flash-lite` |
+| `AI_API_URL` | Optional endpoint override; defaults to Google Gemini Interactions |
 | `DASHBOARD_TOKEN` | Required private token for submitting and stopping tasks from the dashboard |
 
 The configured provider must support function/tool calling. The bot uses the
@@ -557,8 +555,8 @@ This keeps your passwords off GitHub.
 | BOT_PASSWORD      | The bot's Minecraft password (if needed)  |
 | BOT_AUTH_PASSWORD | The password for /login on the server     |
 | AI_API_KEY        | Model provider API key (AI mode)           |
-| AI_MODEL          | Optional model name override               |
-| AI_API_URL        | Provider API endpoint                       |
+| AI_MODEL          | Optional override; defaults to Gemini 3.5 Flash Lite |
+| AI_API_URL        | Optional endpoint override; defaults to Gemini Interactions |
 | DASHBOARD_TOKEN   | Required to control bot tasks from dashboard |
 | PORT              | The port for the web dashboard (optional) |
 
@@ -670,8 +668,8 @@ restrictions.
 | modules.avoidMobs | Bot runs from mobs (turn off if combat is on) |
 | ai.enabled | Enable instruction-driven AI mode instead of AFK modules |
 | ai.autonomous.enabled | Opt in to bounded nearby gathering cycles |
-| ai.model | Default model name (overridden by AI_MODEL) |
-| ai.apiUrl | Default provider endpoint (overridden by AI_API_URL) |
+| ai.model | Default Gemini model (`gemini-3.5-flash-lite`, overridden by AI_MODEL) |
+| ai.apiUrl | Default Gemini Interactions endpoint (overridden by AI_API_URL) |
 | discord.enabled | Send connect/disconnect events to Discord |
 | discord.webhookUrl | Your Discord webhook URL |
 | chat.tpWhitelist | Usernames allowed to use the !tp command |

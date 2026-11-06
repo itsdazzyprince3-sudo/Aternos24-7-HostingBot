@@ -321,6 +321,57 @@ test('AI task retries temporary Gemini 503 responses with bounded backoff', asyn
   }
 });
 
+test('HTTP 429 pauses autonomous gathering without retrying or scheduling another cycle', async () => {
+  const previous = {
+    apiKey: process.env.AI_API_KEY,
+    apiUrl: process.env.AI_API_URL,
+    model: process.env.AI_MODEL
+  };
+  process.env.AI_API_KEY = 'test-key';
+  delete process.env.AI_API_URL;
+  delete process.env.AI_MODEL;
+  let requests = 0;
+  const agent = new AIAgent({
+    config: {
+      enabled: true,
+      autonomous: { enabled: true },
+      apiUrl: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+      model: 'gemini-3.5-flash-lite'
+    },
+    getBot: () => ({}),
+    isConnected: () => true,
+    fetchImpl: async () => {
+      requests += 1;
+      return {
+        ok: false,
+        status: 429,
+        headers: { get: () => null },
+        text: async () => '{"error":{"message":"You exceeded your current quota"}}'
+      };
+    }
+  });
+
+  try {
+    agent.startAutonomous();
+    for (let attempt = 0; attempt < 20 && agent.getStatus().status === 'working'; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.equal(requests, 1);
+    assert.equal(agent.autonomyActive, false);
+    assert.equal(agent.isAutonomousTask, false);
+    assert.equal(agent.autonomousTimer, null);
+    assert.equal(agent.getStatus().status, 'error');
+    assert.match(agent.getStatus().message, /HTTP 429.*paused/);
+  } finally {
+    if (previous.apiKey === undefined) delete process.env.AI_API_KEY;
+    else process.env.AI_API_KEY = previous.apiKey;
+    if (previous.apiUrl === undefined) delete process.env.AI_API_URL;
+    else process.env.AI_API_URL = previous.apiUrl;
+    if (previous.model === undefined) delete process.env.AI_MODEL;
+    else process.env.AI_MODEL = previous.model;
+  }
+});
+
 test('AI task reports a clear message when Gemini remains unavailable after retries', async () => {
   const previous = {
     apiKey: process.env.AI_API_KEY,
@@ -368,16 +419,25 @@ test('AI task reports a clear message when Gemini remains unavailable after retr
 
 test('AI task can answer a question with a plain model response', async () => {
   const previousKey = process.env.AI_API_KEY;
+  const previousUrl = process.env.AI_API_URL;
+  const previousModel = process.env.AI_MODEL;
   process.env.AI_API_KEY = 'test-key';
+  delete process.env.AI_API_URL;
+  delete process.env.AI_MODEL;
   const agent = new AIAgent({
-    config: { enabled: true },
+    config: { enabled: true, model: 'gemini-3.5-flash-lite' },
     getBot: () => ({}),
     isConnected: () => true,
     memory: noOpMemory,
     fetchImpl: async () => ({
       ok: true,
       json: async () => ({
-        choices: [{ message: { role: 'assistant', content: 'You have three logs.' } }]
+        id: 'interaction-answer',
+        status: 'completed',
+        steps: [{
+          type: 'model_output',
+          content: [{ type: 'text', text: 'You have three logs.' }]
+        }]
       })
     })
   });
@@ -392,6 +452,10 @@ test('AI task can answer a question with a plain model response', async () => {
   } finally {
     if (previousKey === undefined) delete process.env.AI_API_KEY;
     else process.env.AI_API_KEY = previousKey;
+    if (previousUrl === undefined) delete process.env.AI_API_URL;
+    else process.env.AI_API_URL = previousUrl;
+    if (previousModel === undefined) delete process.env.AI_MODEL;
+    else process.env.AI_MODEL = previousModel;
   }
 });
 
