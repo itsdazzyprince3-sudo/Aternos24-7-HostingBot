@@ -7,6 +7,11 @@ const mineflayer = require('mineflayer');
 const { Movements, pathfinder, goals } = require('mineflayer-pathfinder');
 const { GoalBlock } = goals;
 const { AIAgent } = require('./lib/ai-agent');
+const {
+  createTrustedChatMemoryNote,
+  isAIChatAuthorized,
+  parseAIChatCommand
+} = require('./lib/ai-chat');
 const { runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
 const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
@@ -50,10 +55,28 @@ const manualControlSession = new ManualControlSession({
 });
 const manualControls = manualControlSession.active;
 
+function sendAIChatMessage(message) {
+  if (!bot || !botState.connected) return;
+  const text = String(message).replace(/[\r\n\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200);
+  if (!text) return;
+  try {
+    bot.chat(`[Virgo] ${text}`);
+  } catch (error) {
+    console.log(`[AI Chat] Could not send response: ${error.message}`);
+  }
+}
+
 const aiAgent = new AIAgent({
   config: config.ai || {},
   getBot: () => bot,
-  isConnected: () => botState.connected
+  isConnected: () => botState.connected,
+  onUpdate: (status, requester) => {
+    if (!requester || !['completed', 'error', 'stopped'].includes(status.status)) return;
+    const response = status.status === 'error'
+      ? `I couldn't complete that: ${status.message}`
+      : status.message;
+    sendAIChatMessage(`${requester}: ${response}`);
+  }
 });
 
 function hasDashboardAccess(req) {
@@ -209,7 +232,7 @@ app.get('/', (req, res) => {
           </div>
           <div class="card">
             <div class="label">AI instruction</div>
-            <p class="ai-status">${config.ai?.enabled ? 'AI mode is enabled. Random AFK movement and combat are disabled while it follows your instruction.' : 'AI mode is disabled. Enable it in settings.json and configure the model API before submitting tasks.'}</p>
+            <p class="ai-status">${config.ai?.enabled ? 'AI mode is enabled. Virgo accepts trusted chat tasks, defends against hostile mobs, retreats at low health, and can recover nearby death drops.' : 'AI mode is disabled. Enable it in settings.json and configure the model API before submitting tasks.'}</p>
             <label for="dashboard-token">Dashboard control token</label>
             <input id="dashboard-token" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN">
             <label for="instruction">What should the bot do?</label>
@@ -733,6 +756,7 @@ function createBot() {
     let spawnHandled = false;
     let connectedAt = 0;
     let kickedReason = null;
+    let deathRecoveryScheduled = false;
 
     bot.once('spawn', () => {
       if (spawnHandled) return;
@@ -775,6 +799,27 @@ function createBot() {
         }
       });
     });
+
+    bot.on('death', () => {
+      if (aiAgent.recordDeath()) console.log('[AI] Recorded the bot death location for safe item recovery.');
+      if (['working', 'paused'].includes(aiAgent.getStatus().status)) aiAgent.stop();
+    });
+
+    const scheduleDeathRecovery = () => {
+      if (!config.ai?.enabled || !aiAgent.hasDeathRecovery() || deathRecoveryScheduled) return;
+      deathRecoveryScheduled = true;
+      setTimeout(() => {
+        deathRecoveryScheduled = false;
+        if (bot !== connectingBot || !botState.connected || !aiAgent.hasDeathRecovery()) return;
+        void aiAgent.recoverDroppedItems().then(result => {
+          console.log(`[AI] Death recovery: ${result.message}`);
+        }).catch(error => {
+          console.log(`[AI] Death recovery paused: ${error.message}`);
+        });
+      }, 5000);
+    };
+    bot.on('spawn', scheduleDeathRecovery);
+    bot.on('respawn', scheduleDeathRecovery);
 
     bot.on('kicked', (reason) => {
       const kickReason = typeof reason === 'object' ? JSON.stringify(reason) : reason;
@@ -866,6 +911,11 @@ function scheduleReconnect() {
 function initializeModules(bot, mcData, defaultMove, authPassword) {
   console.log('[Modules] Initializing...');
 
+  if (config.ai?.enabled || config.modules.chat) chatModule(bot);
+  if (config.ai?.enabled && config.ai.learnFromAllowlistedChat && config.ai.memory !== false) {
+    console.log('[AI] Local chat learning is enabled for players in chat.tpWhitelist.');
+  }
+
   if (config.utils['auto-auth']?.enabled && authPassword) {
     let authHandled = false;
 
@@ -902,7 +952,16 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
 
   if (config.ai?.enabled) {
     bot.pathfinder.setMovements(defaultMove);
-    console.log('[AI] AI mode enabled; random movement, combat, and unsolicited chat are disabled.');
+    addInterval(() => aiAgent.checkSurvival(), 1000);
+    if (config.ai.autonomous?.enabled) {
+      try {
+        aiAgent.startAutonomous();
+        console.log('[AI] Autonomous bounded gathering started.');
+      } catch (error) {
+        console.error(`[AI] Could not start autonomous gathering: ${error.message}`);
+      }
+    }
+    console.log('[AI] AI mode enabled; user tasks, safe hostile-mob defense, and death recovery are active.');
     return;
   }
 
@@ -1006,10 +1065,6 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
   if (config.modules.beds) {
     bedModule(bot, mcData);
   }
-  if (config.modules.chat) {
-    chatModule(bot);
-  }
-
   if (config.utils['chat-log']) {
     bot.on('chat', (username, message) => {
       if (username !== bot.username) {
@@ -1055,7 +1110,7 @@ function startCircleWalk(currentBot, defaultMove) {
     interval,
     shouldStop: () => stopped || bot !== patrolBot || !botState.connected,
     shouldPause: () => manualControls.size > 0 ||
-      (config.ai.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)),
+      (config.ai?.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)),
     goto: point => patrolBot.pathfinder.goto(new GoalBlock(point.x, point.y, point.z)),
     onError: (error, point) => {
       console.log(`[Patrol] Could not reach waypoint (${point.x}, ${point.y}, ${point.z}): ${error.message}`);
@@ -1221,6 +1276,60 @@ function chatModule(bot) {
     if (!bot || username === bot.username) return;
 
     try {
+      const aiCommand = parseAIChatCommand(message);
+      if (config.ai?.enabled && config.ai.memory !== false && config.ai.learnFromAllowlistedChat) {
+        const note = createTrustedChatMemoryNote(username, message, tpWhitelist);
+        if (note && aiCommand?.type !== 'teach') {
+          try {
+            aiAgent.addMemoryNote(note);
+          } catch (error) {
+            console.error(`[AI] Could not save trusted chat memory: ${error.message}`);
+          }
+        }
+      }
+
+      if (aiCommand) {
+        if (!isAIChatAuthorized(username, tpWhitelist)) {
+          console.log(`[AI Chat] Ignored command from untrusted user: ${username}`);
+          return;
+        }
+        try {
+          if (aiCommand.type === 'help') {
+            sendAIChatMessage('Use !ai <question or task>, !ai teach <rule>, !ai status, !ai recover, !ai pause, !ai resume, or !ai stop.');
+          } else if (aiCommand.type === 'status') {
+            const status = aiAgent.getStatus();
+            const grinding = aiAgent.autonomyActive ? 'Autonomous gathering is enabled.' : 'Autonomous gathering is paused.';
+            sendAIChatMessage(`${status.status}: ${status.message} ${grinding}`);
+          } else if (aiCommand.type === 'stop') {
+            aiAgent.stop();
+          } else if (aiCommand.type === 'pause') {
+            const result = aiAgent.pauseAutonomous();
+            sendAIChatMessage(result.paused ? 'Autonomous gathering paused.' : 'Autonomous gathering was not active.');
+          } else if (aiCommand.type === 'resume') {
+            aiAgent.startAutonomous();
+            sendAIChatMessage('Autonomous gathering resumed. Send another !ai task to pause it for your command.');
+          } else if (aiCommand.type === 'teach') {
+            aiAgent.addMemoryNote(aiCommand.text);
+            sendAIChatMessage('Saved that local play note for future tasks.');
+          } else if (aiCommand.type === 'recover') {
+            if (['working', 'paused'].includes(aiAgent.getStatus().status)) {
+              throw new Error('Stop the current task before recovering items.');
+            }
+            void aiAgent.recoverDroppedItems().then(result => {
+              sendAIChatMessage(result.message);
+            }).catch(error => {
+              sendAIChatMessage(`Recovery paused: ${error.message}`);
+            });
+          } else {
+            aiAgent.start(aiCommand.text, username);
+            sendAIChatMessage(`${username}: Got it. I'm working on that now; use !ai status to check progress.`);
+          }
+        } catch (error) {
+          sendAIChatMessage(error.message);
+        }
+        return;
+      }
+
       if (config.discord?.enabled && config.discord?.events?.chat) {
         sendDiscordWebhook(`${username}: ${message}`, 0x7289da);
       }

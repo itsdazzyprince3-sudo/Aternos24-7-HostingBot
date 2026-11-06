@@ -27,6 +27,59 @@ the on-screen buttons to move; Space jumps, Shift sneaks, and Ctrl sprints.
 Manual input pauses the patrol until all controls are released. Held inputs
 automatically release if the dashboard stops sending its control heartbeat.
 
+Local model API and dashboard secrets belong in the ignored `.env` file. The
+`npm start` script loads it automatically. Set `AI_API_KEY`, `AI_API_URL`, and
+`AI_MODEL` using your provider's official instructions. OpenAI-compatible
+chat-completions endpoints and Google's Gemini Interactions endpoint are
+supported; Gemini uses the `x-goog-api-key` header and its native function-call
+steps. For Gemini, set `AI_API_URL` to
+`https://generativelanguage.googleapis.com/v1beta/interactions`. Do not paste
+API keys into chat or commit `.env`. Revoke and replace any key that was
+previously exposed. Gemini API quotas and free-tier availability depend on
+Google's current account and model limits.
+
+### AI chat and survival behavior
+
+Set `ai.enabled` to `true` in your private `settings.json`, configure the model
+API in `.env`, and add trusted Minecraft usernames to `chat.tpWhitelist`.
+Only those names can send AI chat commands. Use `!ai <question or task>` in
+Minecraft chat; `/ai <...>` is also accepted if your server forwards slash
+commands as chat. Examples: `!ai what is in my inventory?`, `!ai mine stone`,
+`!ai teach always keep three logs`, `!ai status`, `!ai recover`, and `!ai stop`.
+When `ai.autonomous.enabled` is enabled, Virgo gathers nearby surface logs,
+stone, and coal in bounded cycles. An authorized `!ai` task pauses autonomous
+gathering; use `!ai resume` to resume it, `!ai pause` to pause it, and `!ai stop`
+to stop the current activity and leave gathering paused.
+
+Each cycle is limited to 24 blocks and 12 model tool calls, only considers
+allowlisted blocks within 16 blocks and 3 vertical blocks, and waits 20 seconds
+between cycles. Virgo won't autonomously craft, explore far away, enter caves,
+attack, or give items away. Stone and coal require a suitable pickaxe.
+Autonomous gathering consumes model API quota while enabled.
+
+Virgo can answer questions, plan bounded resource-gathering/crafting tasks,
+explore within 32 blocks, deliver gathered items only to the trusted requester,
+and use nearby block/entity state as its in-game observations; it cannot watch
+or capture the player's screen. Up to 100 short notes are saved in the ignored
+`data/ai-memory.json`. When `ai.learnFromAllowlistedChat` is enabled, chat from
+players in `chat.tpWhitelist` is saved as local context; keep this enabled only
+if those players know their messages are retained. The model uses this memory
+to recognize preferences, not as instructions that override the current task.
+This is local prompt memory, not model-weight training.
+On the Gemini Interactions endpoint, `ai.webSearch` enables Google's built-in
+Search grounding for up-to-date web questions. Grounded answers include source
+domains in chat. Search availability and quotas depend on Google's account and
+model limits; this feature is not used with OpenAI-compatible endpoints.
+When AI mode is enabled, the bot can defend itself from a fixed list of known
+hostile mobs, never attacks players, and retreats from nearby hostiles at
+8 health or less. After death, it records the last position and tries to
+recover missing drops only when health is safe, the location is within
+64 blocks, and no known hostile mob is nearby. Item recovery depends on the
+server retaining the drops and the route being reachable.
+Virgo does not ask players for clarification. If it is blocked, it can search
+for public information and then report the issue so the player can send another
+`!ai` instruction.
+
 ---
 
 ## Compatibility status
@@ -208,12 +261,12 @@ provider or dashboard secrets in `settings.json` or commit them:
 |----------|--------------|
 | `AI_API_KEY` | API key for your model provider |
 | `AI_MODEL` | Optional model name; overrides `ai.model` |
-| `AI_API_URL` | Optional OpenAI-compatible chat-completions endpoint; overrides `ai.apiUrl` |
+| `AI_API_URL` | Provider endpoint: OpenAI-compatible chat completions or Google Gemini Interactions |
 | `DASHBOARD_TOKEN` | Required private token for submitting and stopping tasks from the dashboard |
 
-The configured provider must support OpenAI-compatible chat completions with
-tool/function calling. The bot uses the model to plan bounded actions, inspect
-inventory, gather blocks, craft items, and navigate nearby. AI mode does not
+The configured provider must support function/tool calling. The bot uses the
+model to plan bounded actions, inspect inventory, gather blocks, craft items,
+and navigate nearby. AI mode does not
 run random movement, combat, or unsolicited chat modules. It is opt-in; with
 `ai.enabled` set to `false`, the existing AFK behavior remains in use.
 When AFK movement is enabled, each patrol lap uses randomized waypoints and
@@ -505,7 +558,7 @@ This keeps your passwords off GitHub.
 | BOT_AUTH_PASSWORD | The password for /login on the server     |
 | AI_API_KEY        | Model provider API key (AI mode)           |
 | AI_MODEL          | Optional model name override               |
-| AI_API_URL        | Optional OpenAI-compatible API URL         |
+| AI_API_URL        | Provider API endpoint                       |
 | DASHBOARD_TOKEN   | Required to control bot tasks from dashboard |
 | PORT              | The port for the web dashboard (optional) |
 
@@ -616,8 +669,9 @@ restrictions.
 | modules.combat | Bot attacks nearby mobs |
 | modules.avoidMobs | Bot runs from mobs (turn off if combat is on) |
 | ai.enabled | Enable instruction-driven AI mode instead of AFK modules |
-| ai.model | Model name for the configured OpenAI-compatible API |
-| ai.apiUrl | Chat-completions API URL; can be overridden with AI_API_URL |
+| ai.autonomous.enabled | Opt in to bounded nearby gathering cycles |
+| ai.model | Default model name (overridden by AI_MODEL) |
+| ai.apiUrl | Default provider endpoint (overridden by AI_API_URL) |
 | discord.enabled | Send connect/disconnect events to Discord |
 | discord.webhookUrl | Your Discord webhook URL |
 | chat.tpWhitelist | Usernames allowed to use the !tp command |

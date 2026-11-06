@@ -4,3 +4,4 @@ node_modules/
 settings.json
 launcher_accounts.json
 *.log
+/data/ai-memory.json

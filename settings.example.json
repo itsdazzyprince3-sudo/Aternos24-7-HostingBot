@@ -66,6 +66,13 @@
   },
   "ai": {
     "enabled": false,
+    "memory": true,
+    "memoryMaxNotes": 100,
+    "learnFromAllowlistedChat": false,
+    "webSearch": true,
+    "autonomous": {
+      "enabled": false
+    },
     "model": "gpt-4o-mini",
     "apiUrl": "https://api.openai.com/v1/chat/completions"
   },
