@@ -953,7 +953,33 @@ function scheduleReconnect() {
   }, delay);
 }
 
+function attachRecentAIEvents(bot) {
+  if (!bot || bot.aiRecentEvents) return;
+  const events = [];
+  bot.aiRecentEvents = events;
+  const record = (type, detail = '') => {
+    events.push({ type, detail: String(detail || '').slice(0, 80), at: Date.now() });
+    if (events.length > 16) events.splice(0, events.length - 16);
+  };
+  let previousHealth = Number(bot.health);
+  bot.on('death', () => record('death', 'Died; recovery may be available.'));
+  bot.on('health', () => {
+    const health = Number(bot.health);
+    if (Number.isFinite(health) && Number.isFinite(previousHealth) && health <= previousHealth - 2) {
+      record('damage', `Health fell to ${health}/20.`);
+    }
+    previousHealth = health;
+  });
+  bot.on('entityHurt', entity => {
+    if (entity && entity === bot.entity) record('hurt', 'The bot was hit.');
+  });
+  bot.on('weatherUpdate', () => record('weather', bot.isRaining ? 'Rain started or intensified.' : 'Rain stopped or weakened.'));
+  bot.on('playerJoined', player => record('player_joined', player?.username || player?.displayName || 'A player joined.'));
+  bot.on('playerLeft', player => record('player_left', player?.username || player?.displayName || 'A player left.'));
+}
+
 function initializeModules(bot, mcData, defaultMove, authPassword) {
+  attachRecentAIEvents(bot);
   console.log('[Modules] Initializing...');
 
   if (config.ai?.enabled || config.modules.chat) chatModule(bot);
@@ -1360,7 +1386,7 @@ function chatModule(bot) {
         }
         try {
           if (aiCommand.type === 'help') {
-            sendAIChatMessage('Use !ai <question or task>, !ai teach <rule>, !ai status, !ai recover, !ai pause, !ai resume, or !ai stop.');
+            sendAIChatMessage('Use !ai <task>, !ai teach <rule>, !ai memory, !ai forget <text>, !ai forget all, !ai status, !ai pause, !ai resume, or !ai stop.');
           } else if (aiCommand.type === 'status') {
             const status = aiAgent.getStatus();
             const grinding = aiAgent.autonomyActive ? 'Autonomous gathering is enabled.' : 'Autonomous gathering is paused.';

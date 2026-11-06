@@ -61,6 +61,15 @@ and `!ai stop` to control it. The local interval is configurable through
 `ai.autonomous.intervalMs`. Progress messages are throttled and can be disabled
 with `ai.autonomous.chatProgress`.
 
+Local web lookup for Ollama is opt-in: set `ai.search.enabled` to `true` and
+provide `TAVILY_API_KEY` in `.env`. Queries go to Tavily only for explicit web
+searches or time-sensitive questions; results are treated as untrusted evidence
+and their URLs are included. Gemini Search uses `ai.webSearch`.
+
+Use `!ai memory` to inspect a short memory summary and recent notes, `!ai forget
+<text>` to remove matching notes, or `!ai forget all` to erase all saved local
+memory. These commands require an authorized username.
+
 Local memory is stored in ignored `data/ai-memory.json`. Version 2 records
 notes, facts, waypoints, player notes, skill outcomes, and counters; existing
 notes-only files remain readable. `ai.learnFromAllowlistedChat` stores chat

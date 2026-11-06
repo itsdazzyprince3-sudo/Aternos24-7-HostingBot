@@ -72,6 +72,14 @@
     "memoryMaxNotes": 100,
     "learnFromAllowlistedChat": false,
     "webSearch": true,
+    "search": {
+      "enabled": false,
+      "provider": "tavily",
+      "apiKeyEnv": "TAVILY_API_KEY",
+      "mode": "when_needed",
+      "maxResults": 3,
+      "timeoutMs": 10000
+    },
     "autonomous": {
       "enabled": false,
       "mode": "local",

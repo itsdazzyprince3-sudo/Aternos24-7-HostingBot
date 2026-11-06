@@ -25,3 +25,58 @@ test('combat skill ignores players and only selects known hostile mobs', async (
   assert.deepEqual(result, { message: 'No hostile mobs nearby.' });
   assert.deepEqual(attacks, []);
 });
+
+
+test('observation includes dimension, weather, equipped armor, hazards, and recent events', () => {
+  const bot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0), equipment: [null, null, { name: 'iron_boots' }, null, { name: 'iron_chestplate' }, { name: 'iron_helmet' }] },
+    inventory: { items: () => [] },
+    findBlocks: () => [new Vec3(2, 64, 0)],
+    blockAt: () => ({ name: 'lava', position: new Vec3(2, 64, 0) }),
+    entities: {}, players: {}, health: 18, food: 14, oxygenLevel: 20,
+    time: { timeOfDay: 13000, day: 4, isDay: false },
+    game: { dimension: 'overworld' }, isRaining: true, thunderState: 1,
+    aiRecentEvents: [{ type: 'damage', detail: 'Health fell', at: 1 }]
+  };
+  const observation = makeSkills(bot).observation();
+  assert.equal(observation.dimension, 'overworld');
+  assert.deepEqual(observation.weather, { raining: true, thunder: true });
+  assert.equal(observation.armor.boots, 'iron_boots');
+  assert.equal(observation.armor.chestplate, 'iron_chestplate');
+  assert.equal(observation.hazards[0].name, 'lava');
+  assert.equal(observation.recentEvents[0].type, 'damage');
+});
+
+test('navigation retries once after a pathfinding failure and then succeeds', async () => {
+  let attempts = 0;
+  const bot = {
+    pathfinder: {
+      goto: async () => { attempts += 1; if (attempts === 1) throw new Error('No path'); return 'arrived'; },
+      stop() {}
+    },
+    clearControlStates() {}
+  };
+  const result = await makeSkills(bot).goto({ x: 1, y: 64, z: 1 }, { timeoutMs: 1000 });
+  assert.equal(result, 'arrived');
+  assert.equal(attempts, 2);
+});
+
+
+test('combat equips better available armor before engaging a hostile mob', async () => {
+  const equipped = [];
+  const bot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0), equipment: [null, null, { name: 'leather_boots' }, null, null, null] },
+    entities: {},
+    inventory: { items: () => [
+      { name: 'iron_boots', count: 1 },
+      { name: 'diamond_chestplate', count: 1 }
+    ] },
+    equip: async (item, slot) => { equipped.push([item.name, slot]); }
+  };
+  const skills = makeSkills(bot);
+  const result = await skills.equipBestArmor();
+  assert.deepEqual(result, ['iron_boots', 'diamond_chestplate']);
+  assert.deepEqual(equipped, [['iron_boots', 'feet'], ['diamond_chestplate', 'torso']]);
+});

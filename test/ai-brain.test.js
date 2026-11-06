@@ -63,3 +63,11 @@ test('autonomous planner learns to avoid a recently unreachable mining route', (
   assert.equal(goal.skill, 'explore');
   assert.match(goal.reason, /failed recently/i);
 });
+
+
+test('memory inspection and erase phrases map to explicit local commands', () => {
+  assert.equal(parseLocalIntent('memory').type, 'memory');
+  assert.equal(parseLocalIntent('what have you learned').type, 'memory');
+  assert.equal(parseLocalIntent('forget all').type, 'forgetAll');
+  assert.equal(parseLocalIntent('clear everything').type, 'forgetAll');
+});

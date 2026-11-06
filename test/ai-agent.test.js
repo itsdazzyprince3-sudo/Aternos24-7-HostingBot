@@ -827,3 +827,66 @@ test('auto provider falls back to local Ollama and answers without a cloud API k
     }
   }
 });
+
+
+test('local web search is opt-in, bounded, and rejects non-HTTPS result links', async () => {
+  const priorKey = process.env.TAVILY_API_KEY;
+  process.env.TAVILY_API_KEY = 'test-search-key';
+  try {
+    let called = false;
+    const agent = new AIAgent({
+      config: { enabled: true, search: { enabled: true, maxResults: 2 } },
+      getBot: () => null,
+      isConnected: () => false,
+      fetchImpl: async (url, options) => {
+        called = true;
+        assert.equal(url, 'https://api.tavily.com/search');
+        assert.equal(options.headers.Authorization, 'Bearer test-search-key');
+        assert.equal(JSON.parse(options.body).max_results, 2);
+        return { ok: true, json: async () => ({ results: [
+          { title: 'Current result', url: 'https://example.com/page', content: 'Evidence' },
+          { title: 'Unsafe', url: 'http://example.com/', content: 'Discard this' }
+        ] }) };
+      }
+    });
+    assert.equal(agent.shouldSearchLocal('What is the latest Minecraft release?'), true);
+    assert.equal(agent.shouldSearchLocal('What is a crafting table?'), false);
+    const results = await agent.searchLocalWeb('latest Minecraft release');
+    assert.equal(called, true);
+    assert.deepEqual(results, [{ title: 'Current result', url: 'https://example.com/page', content: 'Evidence' }]);
+  } finally {
+    if (priorKey === undefined) delete process.env.TAVILY_API_KEY;
+    else process.env.TAVILY_API_KEY = priorKey;
+  }
+});
+
+test('local web search does not run unless enabled in settings', async () => {
+  let called = false;
+  const agent = new AIAgent({
+    config: { enabled: true, search: { enabled: false } },
+    getBot: () => null,
+    isConnected: () => false,
+    fetchImpl: async () => { called = true; throw new Error('should not be called'); }
+  });
+  assert.equal(agent.shouldSearchLocal('What is the latest release?'), false);
+  assert.deepEqual(await agent.searchLocalWeb('latest release'), []);
+  assert.equal(called, false);
+});
+
+test('local model includes web evidence and cites its source URLs', async () => {
+  const agent = new AIAgent({
+    config: { enabled: true, ollama: { enabled: true, url: 'http://localhost/api/chat', model: 'test' } },
+    getBot: () => null,
+    isConnected: () => false,
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      assert.match(body.messages[0].content, /untrusted web search results/i);
+      assert.match(body.messages[0].content, /https:\/\/example\.com\/page/);
+      return { ok: true, json: async () => ({ message: { content: 'Version information found.' } }) };
+    }
+  });
+  const reply = await agent.askLocalModel('latest version?', { health: 20, food: 20, inventory: {} }, [
+    { title: 'Release', url: 'https://example.com/page', content: 'The current release.' }
+  ]);
+  assert.match(reply, /Sources: \[1\] https:\/\/example\.com\/page/);
+});

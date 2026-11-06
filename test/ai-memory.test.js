@@ -69,3 +69,22 @@ test('structured memory upgrades notes-only files and persists bounded player an
   assert.equal(reloaded.getSkill('gatherWood').successes, 1);
   assert.deepEqual(reloaded.getNotes(), []);
 });
+
+
+test('clearAll erases notes, facts, waypoints, players, skill history, and counters', t => {
+  const memory = new AIMemory(makeMemoryPath(t));
+  memory.addNote('Remember this.');
+  memory.setFact('home', 'spawn');
+  memory.addWaypoint('home', { x: 1, y: 64, z: 2 });
+  memory.addPlayerNote('Virgo', 'likes oak');
+  memory.recordSkill('mine', { success: true });
+  memory.incrementStat('cycles');
+  memory.clearAll();
+  assert.deepEqual(memory.getNotes(), []);
+  assert.deepEqual(memory.getFacts(), {});
+  assert.deepEqual(memory.listWaypoints(), []);
+  assert.deepEqual(memory.getPlayers(), []);
+  assert.deepEqual(memory.getSkills(), []);
+  assert.deepEqual(memory.getStats(), {});
+  assert.deepEqual(JSON.parse(fs.readFileSync(memory.filePath, 'utf8')).notes, []);
+});
