@@ -39,7 +39,8 @@
     "chat-log": true,
     "auto-reconnect": true,
     "auto-reconnect-delay": 2000,
-    "max-reconnect-delay": 120000
+    "max-reconnect-delay": 120000,
+    "duplicate-login-delay": 300000
   },
   "movement": {
     "enabled": true,
@@ -71,10 +72,20 @@
     "learnFromAllowlistedChat": false,
     "webSearch": true,
     "autonomous": {
-      "enabled": false
+      "enabled": false,
+      "mode": "local",
+      "intervalMs": 6000,
+      "chatProgress": true
     },
     "model": "gemini-3.5-flash-lite",
-    "apiUrl": "https://generativelanguage.googleapis.com/v1beta/interactions"
+    "apiUrl": "https://generativelanguage.googleapis.com/v1beta/interactions",
+    "provider": "auto",
+    "ollama": {
+      "enabled": true,
+      "url": "http://127.0.0.1:11434/api/chat",
+      "model": "qwen2.5:1.5b",
+      "timeoutMs": 45000
+    }
   },
   "combat": {
     "attack-mobs": true,

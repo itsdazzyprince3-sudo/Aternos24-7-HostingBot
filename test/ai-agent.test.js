@@ -760,3 +760,70 @@ test('item delivery is limited to the trusted requester', async () => {
     /trusted player/
   );
 });
+
+
+test('auto provider falls back to local Ollama and answers without a cloud API key', async () => {
+  const previous = {
+    apiKey: process.env.AI_API_KEY,
+    provider: process.env.AI_PROVIDER,
+    model: process.env.AI_MODEL,
+    url: process.env.OLLAMA_URL,
+    ollamaModel: process.env.OLLAMA_MODEL
+  };
+  delete process.env.AI_API_KEY;
+  delete process.env.AI_PROVIDER;
+  delete process.env.AI_MODEL;
+  delete process.env.OLLAMA_URL;
+  delete process.env.OLLAMA_MODEL;
+  const requests = [];
+  const bot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(3, 64, -4) },
+    health: 20,
+    food: 20,
+    oxygenLevel: 300,
+    time: { timeOfDay: 1000, day: 2, isDay: true },
+    inventory: { items: () => [] },
+    findBlocks: () => [],
+    blockAt: () => null,
+    entities: {},
+    players: {}
+  };
+  const agent = new AIAgent({
+    config: {
+      enabled: true,
+      provider: 'auto',
+      ollama: { enabled: true, url: 'http://127.0.0.1:11434/api/chat', model: 'qwen2.5:1.5b' }
+    },
+    getBot: () => bot,
+    isConnected: () => true,
+    memory: noOpMemory,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ message: { content: 'Hello! I am ready.' } }) };
+    }
+  });
+
+  try {
+    assert.equal(agent.resolveProvider(), 'local');
+    agent.start('How should I prepare my village for a snowstorm?', 'virgo');
+    for (let attempt = 0; attempt < 50 && agent.getStatus().status === 'working'; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.equal(agent.getStatus().status, 'completed');
+    assert.equal(agent.getStatus().message, 'Hello! I am ready.');
+    assert.equal(requests[0].url, 'http://127.0.0.1:11434/api/chat');
+    assert.equal(JSON.parse(requests[0].options.body).model, 'qwen2.5:1.5b');
+  } finally {
+    for (const [key, value] of Object.entries({
+      AI_API_KEY: previous.apiKey,
+      AI_PROVIDER: previous.provider,
+      AI_MODEL: previous.model,
+      OLLAMA_URL: previous.url,
+      OLLAMA_MODEL: previous.ollamaModel
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

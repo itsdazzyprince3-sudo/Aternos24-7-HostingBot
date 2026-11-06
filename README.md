@@ -27,59 +27,44 @@ the on-screen buttons to move; Space jumps, Shift sneaks, and Ctrl sprints.
 Manual input pauses the patrol until all controls are released. Held inputs
 automatically release if the dashboard stops sending its control heartbeat.
 
-Local model API and dashboard secrets belong in the ignored `.env` file. The
-`npm start` script loads it automatically. Set `AI_API_KEY` in `.env`; the
-default model is `gemini-3.5-flash-lite` and the default endpoint is Google's
-Gemini Interactions API. Gemini uses the `x-goog-api-key` header and its native function-call
-steps. Set `AI_API_URL` to
-`https://generativelanguage.googleapis.com/v1beta/interactions`. Do not paste
-API keys into chat or commit `.env`. Revoke and replace any key that was
-previously exposed. Gemini API quotas and free-tier availability depend on
-Google's current account and model limits.
+AI and dashboard secrets belong in the ignored `.env` file. Local play works
+without a cloud API key: install Ollama, pull the model configured under
+`ai.ollama`, and set `ai.provider` to `auto` or `local`. With `auto`, the bot
+uses Ollama when `AI_API_KEY` is absent and uses the configured cloud provider
+when a key is present. Set `OLLAMA_URL` or `OLLAMA_MODEL` to override the local
+settings. The bundled small model is useful for short conversation; deterministic
+Minecraft skills handle most actions directly so gameplay does not depend on a
+large model planning every step.
 
 ### AI chat and survival behavior
 
-Set `ai.enabled` to `true` in your private `settings.json`, configure the model
-API in `.env`, and add trusted Minecraft usernames to `chat.tpWhitelist`.
-Only those names can send AI chat commands. Use `!ai <question or task>` in
-Minecraft chat; `/ai <...>` is also accepted if your server forwards slash
-commands as chat. Examples: `!ai what is in my inventory?`, `!ai mine stone`,
-`!ai teach always keep three logs`, `!ai status`, `!ai recover`, and `!ai stop`.
-If Virgo logs that a sender is untrusted, add that exact Minecraft username to
-`chat.tpWhitelist` in the active `settings.json`, then restart the bot. Usernames
-are matched without case sensitivity or surrounding whitespace.
-When `ai.autonomous.enabled` is enabled, Virgo gathers nearby surface logs,
-stone, and coal in bounded cycles. An authorized `!ai` task pauses autonomous
-gathering; use `!ai resume` to resume it, `!ai pause` to pause it, and `!ai stop`
-to stop the current activity and leave gathering paused.
+Enable `ai.enabled` in your private `settings.json`, then add your Minecraft
+username to `chat.tpWhitelist` or `ai.allowedUsers`. The active configuration
+must be restarted before it takes effect. Startup logs list the trusted names.
+Usernames are matched without case sensitivity. Use `!ai help` for commands.
+Examples: `!ai hello`, `!ai come`, `!ai follow me`, `!ai mine 8 stone`,
+`!ai craft wooden_pickaxe`, `!ai grind wood`, `!ai status`, `!ai teach keep
+three logs`, and `!ai stop`.
 
-Each cycle is limited to 24 blocks and 12 model tool calls, only considers
-allowlisted blocks within 16 blocks and 3 vertical blocks, and waits 20 seconds
-between cycles. Virgo won't autonomously craft, explore far away, enter caves,
-attack, or give items away. Stone and coal require a suitable pickaxe.
-Autonomous gathering consumes model API quota while enabled.
+Virgo can inspect nearby blocks, entities, players, position, health, food, and
+inventory; navigate to visible players; gather resources; craft and smelt items;
+eat, farm, build a basic shelter, sleep, explore, and store or deliver items.
+It reasons from this structured game state and does not capture or render a
+first-person screen. It fights nearby hostile mobs when instructed or while
+surviving, retreats from creepers and low health, and does not attack players.
 
-Virgo can answer questions, plan bounded resource-gathering/crafting tasks,
-explore within 32 blocks, deliver gathered items only to the trusted requester,
-and use nearby block/entity state as its in-game observations; it cannot watch
-or capture the player's screen. Up to 100 short notes are saved in the ignored
-`data/ai-memory.json`. When `ai.learnFromAllowlistedChat` is enabled, chat from
-players in `chat.tpWhitelist` is saved as local context; keep this enabled only
-if those players know their messages are retained. The model uses this memory
-to recognize preferences, not as instructions that override the current task.
-This is local prompt memory, not model-weight training.
-`ai.webSearch` enables Google's built-in Search grounding for up-to-date web
-questions. Grounded answers include source domains in chat. Search availability
-and quotas depend on Google's account and model limits.
-When AI mode is enabled, the bot can defend itself from a fixed list of known
-hostile mobs, never attacks players, and retreats from nearby hostiles at
-8 health or less. After death, it records the last position and tries to
-recover missing drops only when health is safe, the location is within
-64 blocks, and no known hostile mob is nearby. Item recovery depends on the
-server retaining the drops and the route being reachable.
-Virgo does not ask players for clarification. If it is blocked, it can search
-for public information and then report the issue so the player can send another
-`!ai` instruction.
+`ai.autonomous.enabled` opts into local grinding. In `auto` mode Virgo chooses
+short goals from health, hunger, inventory, nearby threats, and stored skill
+history; `!ai grind wood` selects a resource goal. Use `!ai pause`, `!ai resume`,
+and `!ai stop` to control it. The local interval is configurable through
+`ai.autonomous.intervalMs`. Progress messages are throttled and can be disabled
+with `ai.autonomous.chatProgress`.
+
+Local memory is stored in ignored `data/ai-memory.json`. Version 2 records
+notes, facts, waypoints, player notes, skill outcomes, and counters; existing
+notes-only files remain readable. `ai.learnFromAllowlistedChat` stores chat
+context from allowlisted players, so enable it only when those players know
+messages are retained. This is local memory, not model-weight training.
 
 ---
 

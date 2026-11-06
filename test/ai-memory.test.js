@@ -45,3 +45,27 @@ test('AI memory reports a corrupted local file instead of silently discarding it
   fs.writeFileSync(filePath, '{invalid');
   assert.throws(() => new AIMemory(filePath), /not valid JSON/);
 });
+
+
+test('structured memory upgrades notes-only files and persists bounded player and skill data', t => {
+  const filePath = makeMemoryPath(t);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ notes: [{ note: 'Keep oak logs.', recordedAt: '2026-01-01T00:00:00.000Z' }] }));
+
+  const memory = new AIMemory(filePath);
+  assert.deepEqual(memory.getNotes(), ['Keep oak logs.']);
+  memory.setFact('home', { x: 10, y: 64, z: -4 });
+  memory.addWaypoint('home', { x: 10, y: 64, z: -4 });
+  memory.addPlayerNote('Virgo', 'Prefers wood first.');
+  memory.recordSkill('gatherWood', { success: true, durationMs: 1250, detail: '8 logs' });
+  assert.equal(memory.removeNotesMatching('oak'), 1);
+
+  const reloaded = new AIMemory(filePath);
+  const saved = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(saved.version, 2);
+  assert.deepEqual(reloaded.getFact('home'), { x: 10, y: 64, z: -4 });
+  assert.equal(reloaded.getWaypoint('home').x, 10);
+  assert.deepEqual(reloaded.getPlayerNotes('virgo'), ['Prefers wood first.']);
+  assert.equal(reloaded.getSkill('gatherWood').successes, 1);
+  assert.deepEqual(reloaded.getNotes(), []);
+});

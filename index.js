@@ -34,6 +34,8 @@ let activeIntervals = [];
 let reconnectTimeoutId = null;
 let connectionTimeoutId = null;
 let isReconnecting = false;
+let blockAtGuardTimer = null;
+let consoleCommandsInitialized = false;
 
 let botState = {
   connected: false,
@@ -42,7 +44,8 @@ let botState = {
   startTime: Date.now(),
   lastDisconnectReason: null,
   errors: [],
-  wasThrottled: false
+  wasThrottled: false,
+  duplicateLogin: false
 };
 
 const manualControlSession = new ManualControlSession({
@@ -76,6 +79,10 @@ const aiAgent = new AIAgent({
       ? `I couldn't complete that: ${status.message}`
       : status.message;
     sendAIChatMessage(`${requester}: ${response}`);
+  },
+  onProgress: (message, requester, { autonomous } = {}) => {
+    if (autonomous && config.ai?.autonomous?.chatProgress === false) return;
+    sendAIChatMessage(message);
   }
 });
 
@@ -645,6 +652,13 @@ function clearBotTimeouts() {
   if (connectionTimeoutId) { clearTimeout(connectionTimeoutId); connectionTimeoutId = null; }
 }
 
+function clearBlockAtGuard() {
+  if (blockAtGuardTimer) {
+    clearInterval(blockAtGuardTimer);
+    blockAtGuardTimer = null;
+  }
+}
+
 let lastDiscordSend = 0;
 const DISCORD_RATE_LIMIT_MS = 5000;
 
@@ -660,7 +674,24 @@ function addInterval(callback, delay) {
   return id;
 }
 
+function isDuplicateLoginReason(reason) {
+  const text = String(reason || '').toLowerCase();
+  return text.includes('duplicate_login') ||
+    text.includes('another location') ||
+    text.includes('already connected');
+}
+
 function getReconnectDelay() {
+  if (botState.duplicateLogin) {
+    botState.duplicateLogin = false;
+    const duplicateDelay = Number(config.utils['duplicate-login-delay']) || 300000;
+    const jitter = Math.floor(Math.random() * 5000);
+    console.log(
+      `[Bot] Duplicate login detected - another client is using this username. ` +
+      `Waiting ${Math.round((duplicateDelay + jitter) / 1000)}s before reconnecting.`
+    );
+    return duplicateDelay + jitter;
+  }
   if (botState.wasThrottled) {
     botState.wasThrottled = false;
     const throttleDelay = 60000 + Math.floor(Math.random() * 60000);
@@ -679,6 +710,8 @@ function createBot() {
     console.log('[Bot] Already reconnecting, skipping...');
     return;
   }
+
+  clearBlockAtGuard();
 
   if (bot) {
     clearAllIntervals();
@@ -723,14 +756,14 @@ function createBot() {
     });
     installProtocolPacketCompatibility(bot);
 
-    const blockAtGuardTimer = setInterval(() => {
+    blockAtGuardTimer = setInterval(() => {
       if (!bot || typeof bot.blockAt !== 'function') return;
       const guardedBot = bot;
       const blockAt = guardedBot.blockAt.bind(guardedBot);
       guardedBot.blockAt = position => guardedBot.world ? blockAt(position) : null;
-      clearInterval(blockAtGuardTimer);
+      clearBlockAtGuard();
     }, 10);
-    bot.once('spawn', () => clearInterval(blockAtGuardTimer));
+    bot.once('spawn', clearBlockAtGuard);
 
     // minecraft-protocol responds to select_known_packs only after the server
     // sends that request. Do not synthesize an early reply when seeing brand.
@@ -830,11 +863,17 @@ function createBot() {
       botState.lastDisconnectReason = kickedReason;
       pushError({ type: 'kicked', reason: kickReason, time: Date.now() });
       clearAllIntervals();
+      clearBlockAtGuard();
 
       const reasonStr = String(kickReason).toLowerCase();
       if (reasonStr.includes('throttl') || reasonStr.includes('wait before reconnect') || reasonStr.includes('too fast')) {
         console.log('[Bot] Throttle kick detected');
         botState.wasThrottled = true;
+      }
+
+      if (isDuplicateLoginReason(kickReason)) {
+        console.log('[Bot] Another client is using this username - backing off before reconnecting');
+        botState.duplicateLogin = true;
       }
 
       if (config.discord?.events?.disconnect) {
@@ -852,7 +891,12 @@ function createBot() {
       if (connectedAt && Date.now() - connectedAt >= 60000) botState.reconnectAttempts = 0;
       connectedAt = 0;
       clearAllIntervals();
+      clearBlockAtGuard();
       spawnHandled = false;
+
+      if (isDuplicateLoginReason(disconnectReason)) {
+        botState.duplicateLogin = true;
+      }
 
       if (config.discord?.events?.disconnect) {
         sendDiscordWebhook(`Disconnected: ${disconnectReason}`, 0xf87171);
@@ -1074,24 +1118,31 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
   }
 
   if (config.modules['console-commands']) {
-    const readline = require('readline');
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
-    rl.on('line', (line) => {
-      if (!bot || !botState.connected) { console.log('[Console] Bot not connected'); return; }
-      const trimmed = line.trim();
-      if (trimmed.startsWith('say ')) {
-        bot.chat(trimmed.slice(4));
-      } else if (trimmed.startsWith('cmd ')) {
-        bot.chat('/' + trimmed.slice(4));
-      } else if (trimmed === 'status') {
-        console.log(`Connected: ${botState.connected}, Uptime: ${formatUptime(Math.floor((Date.now() - botState.startTime) / 1000))}`);
-      } else {
-        bot.chat(trimmed);
-      }
-    });
+    setupConsoleCommands();
   }
 
   console.log('[Modules] All modules initialized.');
+}
+
+function setupConsoleCommands() {
+  if (consoleCommandsInitialized) return;
+  consoleCommandsInitialized = true;
+
+  const readline = require('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+  rl.on('line', (line) => {
+    if (!bot || !botState.connected) { console.log('[Console] Bot not connected'); return; }
+    const trimmed = line.trim();
+    if (trimmed.startsWith('say ')) {
+      bot.chat(trimmed.slice(4));
+    } else if (trimmed.startsWith('cmd ')) {
+      bot.chat('/' + trimmed.slice(4));
+    } else if (trimmed === 'status') {
+      console.log(`Connected: ${botState.connected}, Uptime: ${formatUptime(Math.floor((Date.now() - botState.startTime) / 1000))}`);
+    } else {
+      bot.chat(trimmed);
+    }
+  });
 }
 
 function startCircleWalk(currentBot, defaultMove) {
@@ -1124,6 +1175,7 @@ function startCircleWalk(currentBot, defaultMove) {
 function startRandomJump(bot) {
   addInterval(() => {
     if (!bot || !botState.connected || manualControls.size || typeof bot.setControlState !== 'function') return;
+    if (config.ai?.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)) return;
     try {
       bot.setControlState('jump', true);
       setTimeout(() => {
@@ -1141,6 +1193,7 @@ function startRandomJump(bot) {
 function startLookAround(bot) {
   addInterval(() => {
     if (!bot || !botState.connected || manualControls.size) return;
+    if (config.ai?.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)) return;
     try {
       const yaw = (Math.random() * Math.PI * 2) - Math.PI;
       const pitch = (Math.random() * Math.PI / 2) - Math.PI / 4;
@@ -1414,6 +1467,7 @@ process.on('uncaughtException', (err) => {
     msg.includes('write after end') || msg.includes('This socket has been ended');
 
   clearAllIntervals();
+  clearBlockAtGuard();
   botState.connected = false;
 
   if (isReconnecting) {
@@ -1438,6 +1492,7 @@ function shutdown(signal) {
   console.log(`[System] ${signal} received - shutting down gracefully.`);
   clearBotTimeouts();
   clearAllIntervals();
+  clearBlockAtGuard();
   if (bot) {
     try {
       manualControlSession.release();
