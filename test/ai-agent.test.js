@@ -926,3 +926,215 @@ test('local model includes web evidence and cites its source URLs', async () => 
   ]);
   assert.match(reply, /Sources: \[1\] https:\/\/example\.com\/page/);
 });
+
+
+test('autonomous grinding backs off and pauses after three failed cycles', async () => {
+  const scheduled = [];
+  const agent = new AIAgent({
+    config: { enabled: true, autonomous: { enabled: true } },
+    getBot: () => ({}),
+    isConnected: () => true,
+    memory: { recordSkill() {}, incrementStat() {} }
+  });
+  agent.autonomyActive = true;
+  agent.createSkills = () => ({ observation: () => ({ health: 20, food: 20, inventory: {} }) });
+  agent.executeSkill = async () => { throw new Error('No logs reached inventory.'); };
+  agent.scheduleAutonomousCycle = milliseconds => scheduled.push(milliseconds);
+  await agent.runAutonomyCycle();
+  await agent.runAutonomyCycle();
+  await agent.runAutonomyCycle();
+  assert.deepEqual(scheduled, [15000, 30000]);
+  assert.equal(agent.autonomyActive, false);
+  assert.equal(agent.autonomyConsecutiveFailures, 3);
+  assert.equal(agent.getStatus().status, 'paused');
+});
+
+
+test('Lunax provider sends OpenAI-compatible chat-completions requests', async () => {
+  const keys = ['LUNAX_API_KEY', 'LUNAX_API_URL', 'LUNAX_MODEL', 'AI_PROVIDER', 'MODEL_API_KEY', 'OPENAI_API_KEY', 'AI_API_KEY'];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  process.env.LUNAX_API_KEY = 'test-lunax-key';
+  process.env.AI_PROVIDER = 'lunax';
+  delete process.env.LUNAX_API_URL;
+  delete process.env.LUNAX_MODEL;
+  delete process.env.MODEL_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.AI_API_KEY;
+  try {
+    const agent = new AIAgent({ config: { enabled: true, provider: 'lunax' }, getBot: () => null, isConnected: () => false,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, 'https://lunax.co/api/v1/chat/completions');
+        assert.equal(options.headers.Authorization, 'Bearer test-lunax-key');
+        const body = JSON.parse(options.body);
+        assert.equal(body.model, 'lunax-chat');
+        assert.equal(body.messages[0].content, 'Hello');
+        assert.ok(Array.isArray(body.tools));
+        assert.equal(body.parallel_tool_calls, undefined);
+        assert.equal(body.max_tokens, 512);
+        return { ok: true, json: async () => ({ choices: [{ message: { content: 'Hi!' } }] }) };
+      }
+    });
+    assert.equal(agent.resolveProvider(), 'lunax');
+    const response = await agent.requestModel([{ role: 'user', content: 'Hello' }]);
+    assert.equal(response.choices[0].message.content, 'Hi!');
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('auto provider selects Lunax when its API key is configured', () => {
+  const keys = ['LUNAX_API_KEY', 'MODEL_API_KEY', 'OPENAI_API_KEY', 'AI_API_KEY', 'AI_PROVIDER'];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  process.env.LUNAX_API_KEY = 'test-lunax-key';
+  delete process.env.MODEL_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.AI_API_KEY;
+  delete process.env.AI_PROVIDER;
+  try {
+    const agent = new AIAgent({ config: { enabled: true, provider: 'auto' }, getBot: () => null, isConnected: () => false });
+    assert.equal(agent.resolveProvider(), 'lunax');
+    assert.equal(agent.modelName(), 'lunax-chat');
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Meta Responses provider chains bounded Minecraft tool calls', async () => {
+  const keys = ['MODEL_API_KEY', 'META_API_URL', 'META_MODEL', 'META_REASONING_EFFORT', 'AI_PROVIDER', 'OPENAI_API_KEY', 'AI_API_KEY'];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  process.env.MODEL_API_KEY = 'test-meta-key';
+  process.env.AI_PROVIDER = 'meta';
+  delete process.env.META_API_URL;
+  delete process.env.META_MODEL;
+  delete process.env.META_REASONING_EFFORT;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.AI_API_KEY;
+  try {
+    const requests = [];
+    const responses = [
+      { id: 'resp-1', output: [{ type: 'function_call', call_id: 'call-observe', name: 'observe', arguments: '{}' }] },
+      { id: 'resp-2', output: [{ type: 'function_call', call_id: 'call-finish', name: 'finish_task', arguments: '{"message":"Done."}' }] }
+    ];
+    const agent = new AIAgent({
+      config: { enabled: true, provider: 'meta', meta: { model: 'muse-wonder-1.0', reasoningEffort: 'medium' } },
+      getBot: () => ({}),
+      isConnected: () => true,
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return { ok: true, json: async () => responses.shift() };
+      }
+    });
+    agent.executeTool = async name => name === 'observe'
+      ? { health: 20, inventory: [] }
+      : { finished: true, message: 'Done.' };
+    agent.start('Inspect the nearby area.');
+    for (let attempt = 0; attempt < 30 && agent.getStatus().status === 'working'; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.equal(agent.getStatus().status, 'completed');
+    assert.equal(agent.getStatus().message, 'Done.');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, 'https://api.meta.ai/v1/responses');
+    assert.equal(requests[0].options.headers.Authorization, 'Bearer test-meta-key');
+    const first = JSON.parse(requests[0].options.body);
+    assert.equal(first.model, 'muse-wonder-1.0');
+    assert.equal(first.reasoning.effort, 'medium');
+    assert.match(first.instructions, /You are Virgo/);
+    assert.ok(first.tools.some(tool => tool.name === 'observe' && tool.type === 'function'));
+    assert.equal(first.input, 'Inspect the nearby area.');
+    const second = JSON.parse(requests[1].options.body);
+    assert.equal(second.previous_response_id, 'resp-1');
+    assert.deepEqual(second.input, [{ type: 'function_call_output', call_id: 'call-observe', output: JSON.stringify({ health: 20, inventory: [] }) }]);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('OpenAI provider selects its own endpoint and sends bounded reasoning settings', async () => {
+  const previous = Object.fromEntries(['AI_API_KEY', 'OPENAI_API_KEY', 'AI_API_URL', 'OPENAI_API_URL', 'AI_MODEL', 'OPENAI_MODEL', 'AI_REASONING_EFFORT', 'OPENAI_REASONING_EFFORT', 'AI_PROVIDER'].map(key => [key, process.env[key]]));
+  process.env.AI_API_KEY = 'test-openai-key';
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.AI_API_URL;
+  delete process.env.OPENAI_API_URL;
+  delete process.env.AI_MODEL;
+  delete process.env.OPENAI_MODEL;
+  delete process.env.AI_REASONING_EFFORT;
+  delete process.env.OPENAI_REASONING_EFFORT;
+  delete process.env.AI_PROVIDER;
+  try {
+    let called = false;
+    const agent = new AIAgent({
+      config: {
+        enabled: true,
+        provider: 'openai',
+        apiUrl: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+        openai: { model: 'gpt-5.5', reasoningEffort: 'medium' }
+      },
+      getBot: () => null,
+      isConnected: () => false,
+      fetchImpl: async (url, options) => {
+        called = true;
+        assert.equal(url, 'https://api.openai.com/v1/chat/completions');
+        assert.equal(options.headers.Authorization, 'Bearer test-openai-key');
+        const body = JSON.parse(options.body);
+        assert.equal(body.model, 'gpt-5.5');
+        assert.equal(body.reasoning_effort, 'medium');
+        assert.ok(Array.isArray(body.tools));
+        return { ok: true, json: async () => ({ choices: [{ message: { content: 'Plan ready.' } }] }) };
+      }
+    });
+    assert.equal(agent.resolveProvider(), 'openai');
+    assert.equal(agent.modelEndpoint(), 'https://api.openai.com/v1/chat/completions');
+    const response = await agent.requestModel([{ role: 'user', content: 'prepare safely' }]);
+    assert.equal(called, true);
+    assert.equal(response.choices[0].message.content, 'Plan ready.');
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('OpenAI reasoning effort rejects unknown values and uses a fast safe default', () => {
+  const agent = new AIAgent({
+    config: { enabled: true, provider: 'openai', openai: { reasoningEffort: 'instant' } },
+    getBot: () => null,
+    isConnected: () => false
+  });
+  assert.equal(agent.reasoningEffort(), 'low');
+});
+
+
+test('auto provider prefers a separate OpenAI key over a configured Gemini fallback', () => {
+  const previous = Object.fromEntries(['OPENAI_API_KEY', 'AI_API_KEY', 'AI_PROVIDER', 'AI_API_URL'].map(key => [key, process.env[key]]));
+  process.env.OPENAI_API_KEY = 'test-openai-key';
+  process.env.AI_API_KEY = 'test-gemini-key';
+  delete process.env.AI_PROVIDER;
+  delete process.env.AI_API_URL;
+  try {
+    const agent = new AIAgent({
+      config: { enabled: true, provider: 'auto', apiUrl: 'https://generativelanguage.googleapis.com/v1beta/interactions' },
+      getBot: () => null,
+      isConnected: () => false
+    });
+    assert.equal(agent.resolveProvider(), 'openai');
+    assert.equal(agent.modelEndpoint(), 'https://api.openai.com/v1/chat/completions');
+    assert.equal(agent.modelName(), 'gpt-5.5');
+    assert.equal(agent.modelApiKey(), 'test-openai-key');
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

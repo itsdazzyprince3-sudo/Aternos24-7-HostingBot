@@ -256,14 +256,44 @@ provider or dashboard secrets in `settings.json` or commit them:
 
 | Variable | What it does |
 |----------|--------------|
-| `AI_API_KEY` | API key for your model provider |
+| `AI_API_KEY` | Gemini or compatible provider key |
+| `LUNAX_API_KEY` | Optional Lunax API key; with `AI_PROVIDER=auto`, this selects `lunax-chat` |
+| `LUNAX_MODEL` | Optional Lunax model override; defaults to `lunax-chat` |
+| `LUNAX_API_URL` | Optional Lunax chat-completions endpoint override |
+| `MODEL_API_KEY` | Optional Meta Model API key; with `AI_PROVIDER=auto`, selects Muse Wonder if no Lunax key is set |
+| `META_MODEL` | Optional Meta model override; defaults to `muse-wonder-1.0` |
+| `META_REASONING_EFFORT` | Meta reasoning level: `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (defaults to `low`) |
+| `META_API_URL` | Optional Meta Responses endpoint override |
+| `OPENAI_API_KEY` | Optional OpenAI key; with `AI_PROVIDER=auto`, selected when no Meta key is set |
 | `AI_MODEL` | Optional override; defaults to `gemini-3.5-flash-lite` |
-| `AI_API_URL` | Optional endpoint override; defaults to Google Gemini Interactions |
+| `AI_API_URL` | Optional endpoint override; defaults to the selected provider endpoint |
+| `AI_PROVIDER` | `auto`, `local`, `gemini`, `openai`, `meta`, or `lunax`; `auto` uses local Ollama without a cloud key |
+| `OPENAI_API_URL` | Optional OpenAI-compatible chat endpoint override |
+| `OPENAI_MODEL` | Optional OpenAI model override; defaults to `gpt-5.5` |
+| `OPENAI_REASONING_EFFORT` | OpenAI reasoning level: `low`, `medium`, `high`, or `xhigh` (defaults to `low`) |
 | `DASHBOARD_TOKEN` | Required private token for submitting and stopping tasks from the dashboard |
 
-The configured provider must support function/tool calling. The bot uses the
-model to plan bounded actions, inspect inventory, gather blocks, craft items,
-and navigate nearby. AI mode does not
+To use Lunax, add `LUNAX_API_KEY` to `.env`; `AI_PROVIDER=auto` selects it
+when present and uses `lunax-chat` at `https://lunax.co/api/v1/chat/completions`.
+This follows the provider example; verify current quotas and tool-calling support with
+Lunax before relying on it.
+
+To use Meta reasoning, add `MODEL_API_KEY` to `.env`; `AI_PROVIDER=auto` selects
+Muse Wonder when that key is present and no Lunax key is set. The default model is `muse-wonder-1.0`; set
+`META_REASONING_EFFORT=medium` or `high` for deeper planning. Meta Responses uses
+server-managed response context for tool results and keeps all in-game actions inside
+the same bounded local tool layer. API usage may be billed.
+
+To use OpenAI, add `OPENAI_API_KEY` to `.env`; if both Meta and OpenAI keys are set,
+auto mode selects Meta. You can explicitly set `AI_PROVIDER=openai` and
+`AI_MODEL=gpt-5.5` as well. OpenAI reasoning effort defaults to `low`; set
+`OPENAI_REASONING_EFFORT=medium` or `high` for more planning at the cost of slower
+responses and API usage. `AI_API_URL` can point to another OpenAI-compatible
+chat-completions service. Cloud calls may incur provider charges. The configured
+provider must support function/tool calling. The model plans bounded actions;
+all game actions still pass through the bot's local skills, allowlist, and limits.
+The bot uses the model to inspect inventory, gather blocks, craft items, and
+navigate nearby. AI mode does not
 run random movement, combat, or unsolicited chat modules. It is opt-in; with
 `ai.enabled` set to `false`, the existing AFK behavior remains in use.
 When AFK movement is enabled, each patrol lap uses randomized waypoints and

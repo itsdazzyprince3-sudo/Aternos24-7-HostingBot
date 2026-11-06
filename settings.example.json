@@ -87,6 +87,20 @@
       "chatProgress": true
     },
     "model": "gemini-3.5-flash-lite",
+    "openai": {
+      "model": "gpt-5.5",
+      "reasoningEffort": "low",
+      "apiUrl": "https://api.openai.com/v1/chat/completions"
+    },
+    "meta": {
+      "model": "muse-wonder-1.0",
+      "reasoningEffort": "low",
+      "apiUrl": "https://api.meta.ai/v1/responses"
+    },
+    "lunax": {
+      "model": "lunax-chat",
+      "apiUrl": "https://lunax.co/api/v1/chat/completions"
+    },
     "apiUrl": "https://generativelanguage.googleapis.com/v1beta/interactions",
     "provider": "auto",
     "ollama": {

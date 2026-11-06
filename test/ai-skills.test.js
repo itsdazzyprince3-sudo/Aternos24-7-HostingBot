@@ -80,3 +80,30 @@ test('combat equips better available armor before engaging a hostile mob', async
   assert.deepEqual(result, ['iron_boots', 'diamond_chestplate']);
   assert.deepEqual(equipped, [['iron_boots', 'feet'], ['diamond_chestplate', 'torso']]);
 });
+
+
+test('wood gathering fails honestly when log blocks break but no log items enter inventory', async () => {
+  const logPosition = new Vec3(1, 64, 0);
+  let scans = 0;
+  const progress = [];
+  const bot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0), equipment: [] },
+    inventory: { items: () => [] },
+    registry: { blocksByName: { oak_log: { id: 1 } } },
+    findBlocks: () => (++scans === 1 ? [logPosition] : []),
+    blockAt: position => position.y < 64
+      ? { name: 'dirt', position }
+      : { name: 'oak_log', position, diggable: true },
+    entities: {}, players: {}, health: 20, food: 20,
+    game: { dimension: 'overworld' }
+  };
+  const skills = makeSkills(bot);
+  skills.goto = async () => {};
+  skills.chopReachableLogs = async () => 8;
+  skills.explore = async () => ({ message: 'scouted' });
+  skills.onProgress = message => progress.push(message);
+  await assert.rejects(skills.gatherWood(8), /chopped 8 log block\(s\), but no log drops reached my inventory/i);
+  assert.equal(skills.countItem('oak_log'), 0);
+  assert.equal(progress.some(message => /8 collected/i.test(message)), false);
+});
