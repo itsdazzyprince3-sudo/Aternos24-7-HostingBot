@@ -1,5 +1,14 @@
 # Minecraft Java 26.3 Compatibility Report
 
+> **Dependency update (2026-11-06):** This report describes the earlier
+> experimental Git-based 26.3 stack, not the current dependency tree. The
+> current manifest pins registry releases Mineflayer 4.39.0 and
+> mineflayer-pathfinder 2.4.5 and includes targeted local patches for the
+> 26.3 teleport-confirm and tick-end packets. Full native 26.3 support remains
+> unverified. See
+> [dependency-repair-report.md](./dependency-repair-report.md) for the current
+> dependency audit, lockfile, and test status.
+
 **Repository:** `itsdazzyprince3-sudo/Aternos24-7-HostingBot`
 **Audited commit:** native 26.3 implementation commit pending
 **Audit date:** 2026-11-06

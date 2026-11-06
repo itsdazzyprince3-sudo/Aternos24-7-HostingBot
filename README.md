@@ -12,6 +12,7 @@ The bot uses Mineflayer to join your Minecraft server as a fake player.
 It moves around, swings its arm, and does small random actions so the server
 does not detect it as idle. If it gets kicked or disconnected for any reason,
 it reconnects on its own using an exponential backoff so it does not spam the server.
+Mineflayer is configured to automatically request a respawn when the bot dies.
 
 A small web server runs alongside the bot. You can visit the URL your host gives
 you to see a live dashboard showing whether the bot is connected, its uptime,
@@ -30,30 +31,57 @@ automatically release if the dashboard stops sending its control heartbeat.
 
 ## Compatibility status
 
-The project now uses an experimental native 26.3 stack: the upstream Mineflayer
-26.3 commit, the upstream protocol-777 branch, vendored official 26.3 data,
-and local compatibility patches for Prismarine physics and chunk dispatch.
+Dependencies use the official npm releases Mineflayer 4.39.0 and
+mineflayer-pathfinder 2.4.5, pinned in `package.json` and `package-lock.json`.
+This avoids Git-hosted package dependencies and makes clean installs
+reproducible from the lockfile.
 
-**Native Minecraft Java Edition 26.3 is implemented experimentally, not claimed
-as stable.** The vendored data resolves protocol 777 and data version 5023.
-The project also loads the required physics and chunk implementations for
-26.3. A real login, configuration, chunk, movement, and long-running session
-against an authorized 26.3 server is still required before calling the stack
-fully verified.
+The published Mineflayer release does not include complete native 26.3
+support. This project carries targeted local patches for 26.3 teleport
+confirmation and movement tick-end packets, based on upstream PrismarineJS
+work. **These patches address known disconnect causes but do not make the
+overall 26.3 protocol implementation complete or verified.** Other 26.3 packet
+schemas may still fail. Use a server version supported by the published
+release, or a separately tested ViaVersion/ViaProxy setup that accepts a
+supported client version.
 
-The compatibility report is in
-[`protocol-compatibility-report.md`](protocol-compatibility-report.md). It
-records the dependency audit, upstream evidence, baseline tests, and the exact
-requirements for a future native 26.3 verification. A ViaVersion or ViaProxy
-connection may provide proxy-translated compatibility, but that is not native
-26.3 support and must be tested separately.
+### Fabric server support
+
+The bot speaks Minecraft's network protocol; it is not the Minecraft Java
+launcher and does not start a Java game client or load Fabric client mods.
+Fabric itself does not imply a different protocol for every server: a Fabric
+server can accept protocol-compatible clients when its installed mods are
+server-side only. Mods that require a matching client mod or custom network
+payloads need their specific protocol implemented; there is no general switch
+that makes Mineflayer load arbitrary mods.
+
+The official [Fabric networking guide](https://docs.fabricmc.net/develop/networking)
+describes custom payloads registered and handled by mod code. If a Fabric
+server rejects the bot during login or play, identify the Minecraft version
+and exact modpack first. Remove or configure any server mod that mandates a
+client mod only if you administer that server. Do not select a 26.1 fallback
+for a 26.3 server unless a compatible protocol-translating proxy is actually
+in front of it.
+
+The local 26.3 teleport/tick fixes are based on the upstream
+[teleport-confirm change](https://github.com/PrismarineJS/mineflayer/pull/4130)
+and the merged
+[client tick-end change](https://github.com/PrismarineJS/mineflayer/pull/4137).
+Broader 26.3 protocol/data updates remain experimental upstream work, so keep
+the server log when testing and do not treat a successful spawn as proof that
+every mod packet or gameplay feature is supported.
+
+See [`dependency-repair-report.md`](dependency-repair-report.md) for the
+dependency audit and test results, and
+[`protocol-compatibility-report.md`](protocol-compatibility-report.md) for
+historical protocol findings.
 
 ---
 
 ## Requirements
 
 - A GitHub account
-- Node.js 18 or newer for the published dependency set
+- Node.js 22 or newer for the published dependency set
 - A Minecraft server (see compatibility section below)
 - A hosting account for the bot (see deployment options below)
 
@@ -130,8 +158,8 @@ networks.
 
 1. Install Paper or Bukkit on your server.
 2. Enable offline/cracked mode so the bot can join without a paid account.
-3. For native 26.3 testing, do not use ViaVersion or ViaProxy between the bot
-   and the authorized 26.3 server. The bot now negotiates protocol 777 directly.
+3. Use a server version supported by the published Mineflayer release. Native
+   26.3 support is not verified with this registry-based dependency set.
 4. In server.properties, set player-idle-timeout=0.
    This stops Minecraft from kicking the bot for being idle.
 
@@ -151,8 +179,8 @@ and fill in the required fields. The runtime intentionally reads
 "server": {
   "ip": "your.server.ip",
   "port": 25565,
-  "version": "26.3",
-  "proxy-version-fallback": "26.1"
+  "loader": "fabric",
+  "version": "26.1"
 }
 
 "utils": {
@@ -167,6 +195,11 @@ and fill in the required fields. The runtime intentionally reads
   "apiUrl": "https://api.openai.com/v1/chat/completions"
 }
 ```
+
+For a Minecraft 26.3 server, do not assume direct native support. Use a proxy
+that translates between the server and a protocol version supported by the
+published Mineflayer release, and configure a fallback only after verifying
+that proxy.
 
 For AI mode, set these as environment variables on the bot host. Do not put
 provider or dashboard secrets in `settings.json` or commit them:
@@ -203,7 +236,7 @@ Upload all the files to a new GitHub repository when done.
 ## Run on Termux, Windows, macOS, or proot
 
 The bot runs on Node.js and uses the same `npm start` command on each platform.
-Node.js 18 or newer is required; use a current Node.js LTS release when possible.
+Node.js 22 or newer is required; use a current Node.js LTS release when possible.
 Run the commands from the repository folder. Keep `settings.json` private.
 
 ### Termux (Android)
@@ -217,7 +250,7 @@ git clone https://github.com/itsdazzyprince3-sudo/Aternos24-7-HostingBot.git
 cd Aternos24-7-HostingBot
 cp settings.example.json settings.json
 nano settings.json
-npm install
+npm ci
 npm start
 ```
 
@@ -237,9 +270,9 @@ proot-distro install ubuntu
 proot-distro login ubuntu
 ```
 
-Then, inside the Linux shell, install Git and Node.js 18 or newer using that
+Then, inside the Linux shell, install Git and Node.js 22 or newer using that
 distribution's current package instructions. Confirm `node --version` is at
-least 18 before installing the bot:
+least 22 before installing the bot:
 
 ```sh
 apt update
@@ -248,12 +281,12 @@ git clone https://github.com/itsdazzyprince3-sudo/Aternos24-7-HostingBot.git
 cd Aternos24-7-HostingBot
 cp settings.example.json settings.json
 nano settings.json
-npm install
+npm ci
 npm start
 ```
 
-If the distribution's `nodejs` package is older than version 18, install a
-supported Node.js LTS version before running `npm install`. Proot does not keep
+If the distribution's `nodejs` package is older than version 22, install a
+supported Node.js LTS version before running `npm ci`. Proot does not keep
 processes running after the Termux/proot session or Android itself is stopped.
 
 ### Windows PowerShell
@@ -263,7 +296,7 @@ Install Node.js LTS, open PowerShell in the repository folder, and run:
 ```powershell
 Copy-Item settings.example.json settings.json
 notepad settings.json
-npm.cmd install
+npm.cmd ci
 npm.cmd start
 ```
 
@@ -296,7 +329,7 @@ Install Node.js LTS, open Command Prompt in the repository folder, and run:
 ```bat
 copy settings.example.json settings.json
 notepad settings.json
-npm install
+npm ci
 npm start
 ```
 
@@ -308,7 +341,7 @@ Install Node.js LTS (for example, with Homebrew), then run:
 brew install node
 cp settings.example.json settings.json
 open -e settings.json
-npm install
+npm ci
 npm start
 ```
 
@@ -320,7 +353,8 @@ use `npm test` (or `npm.cmd test` in PowerShell).
 ## Deployment Options
 
 Pick one platform to host the bot. All of them run Node.js and work with this bot.
-The build command is always `npm install` and the start command is always `npm start`.
+Use `npm ci` as the build command for a clean, lockfile-based install. The start
+command is `npm start`.
 
 ---
 
@@ -355,7 +389,7 @@ alongside Render to keep it awake.
 1. Go to render.com and create an account.
 2. Click New, then Web Service.
 3. Connect your GitHub repository.
-4. Set Build Command to: npm install
+4. Set Build Command to: npm ci
 5. Set Start Command to: npm start
 6. Deploy.
 7. Copy the URL Render gives you.
@@ -387,12 +421,12 @@ Setup takes about 30 minutes but you never have to touch it again.
 5. Once the VM is running, SSH into it:
    ssh -i your-key.key ubuntu@YOUR_VM_IP
 6. Install Node.js:
-   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
    sudo apt-get install -y nodejs
 7. Clone your GitHub repo:
    git clone https://github.com/YourUsername/YourRepo.git
    cd YourRepo
-   npm install
+   npm ci
 8. Install pm2 to keep the bot running after you close SSH:
    sudo npm install -g pm2
    pm2 start npm --name afkbot -- start
@@ -492,15 +526,18 @@ actions, and a task can be stopped from the same page.
 
 If the bot is disconnected, /health and the dashboard show the most recent
 server kick or disconnect reason. Reconnect backoff now persists across short
-connections; the bot cannot prevent server-host shutdowns, authentication
-failures, unsupported protocol versions, bans, or server anti-bot policies.
+connections. With the example 120-second maximum, later retries can be about
+two minutes apart; the terminal prints each scheduled delay. The bot cannot
+prevent server-host shutdowns, authentication failures, unsupported protocol
+versions, bans, or server anti-bot policies.
 
 ### Troubleshooting protocol parse errors
 
 If the log contains `Parse error for play.toClient` with a packet ID, the client
 could not decode a server packet. Check that `server.version` matches the
-version advertised by your server first. For example, packet ID 75 is
-`recipe_book_add` when using the native 26.3 protocol.
+version advertised by your server first. Packet IDs and packet names depend on the negotiated protocol version; do not
+assume an ID has the same meaning across versions. The current published
+dependency set does not guarantee native 26.3 packet decoding.
 
 To temporarily include the full hex for small failed packets while testing in
 PowerShell:
@@ -514,6 +551,21 @@ The setting only applies to that PowerShell window; remove it afterward with:
 
 ```powershell
 $env:MINECRAFT_PROTOCOL_DEBUG_FRAMES = $null
+```
+
+To check whether the 26.3 teleport-confirm compatibility wrapper is active,
+enable its field-name-only diagnostic:
+
+```powershell
+$env:MINECRAFT_PROTOCOL_DEBUG_WRITES = "1"
+npm.cmd start
+```
+
+It reports the active schema and outgoing field names, without logging
+coordinates or packet contents. Turn it off with:
+
+```powershell
+$env:MINECRAFT_PROTOCOL_DEBUG_WRITES = $null
 ```
 
 The full frame is printed only for failed packets no larger than 512 bytes.
@@ -536,8 +588,9 @@ npm test
 npm ls --depth=0
 ```
 
-The tests cover native 26.3 protocol and data compatibility, packet decoding,
-and version selection. To start the bot and connect to a server, separately copy
+The tests cover bot controls, patrols, process supervision, local packet
+compatibility, and version selection. Native 26.3 end-to-end compatibility is
+not verified. To start the bot and connect to a server, separately copy
 `settings.example.json` to a private `settings.json` and configure an authorized
 test server. Do not use a public server or bypass authentication and hosting
 restrictions.
@@ -552,7 +605,8 @@ restrictions.
 | bot-account.type | Set to "offline" for cracked servers |
 | server.ip | Your server's IP address |
 | server.port | Your server's port (default 25565) |
-| server.version | Native server version; use `26.3` for protocol 777 |
+| server.loader | Optional server implementation label, such as "fabric"; informational only |
+| server.version | Exact Minecraft server version; unsupported protocols are rejected |
 | server.proxy-version-fallback | Optional fallback for an unsupported target version |
 | utils.auto-auth.enabled | Turn on if the server uses AuthMe or similar |
 | utils.chat-messages.repeat-delay | Seconds between periodic chat messages |

@@ -9,6 +9,7 @@ const { GoalBlock } = goals;
 const { AIAgent } = require('./lib/ai-agent');
 const { runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
+const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
 if (!fs.existsSync(settingsPath)) {
   throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
@@ -694,8 +695,10 @@ function createBot() {
       port: config.server.port,
       version: botVersion,
       hideErrors: false,
+      respawn: true,
       checkTimeoutInterval: 600000
     });
+    installProtocolPacketCompatibility(bot);
 
     const blockAtGuardTimer = setInterval(() => {
       if (!bot || typeof bot.blockAt !== 'function') return;
@@ -1351,6 +1354,12 @@ console.log('='.repeat(50));
 console.log('  Minecraft AFK Bot - Fixed Edition');
 console.log('='.repeat(50));
 console.log(`Server:         ${config.server.ip}:${config.server.port}`);
+if (String(config.server.loader || '').toLowerCase() === 'fabric') {
+  console.log(
+    '[Compatibility] Fabric server selected. Mineflayer is a protocol bot, ' +
+    'not a Fabric client; client-required mod protocols need separate support.'
+  );
+}
 console.log(`Bot Username:   ${process.env.BOT_USERNAME || config['bot-account'].username}`);
 console.log(`Auto-Reconnect: ${config.utils['auto-reconnect'] ? 'Enabled' : 'Disabled'}`);
 console.log('='.repeat(50));

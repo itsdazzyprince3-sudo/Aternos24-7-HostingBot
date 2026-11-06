@@ -6,10 +6,10 @@
     "type": "offline"
   },
   "server": {
-    "ip": "VirgoYT.aternos.me",
-    "port": 12652,
-    "version": "26.3",
-    "proxy-version-fallback": "26.1",
+    "ip": "your.server.address",
+    "port": 25565,
+    "loader": "fabric",
+    "version": "26.1",
     "try-creative": false
   },
   "position": {
