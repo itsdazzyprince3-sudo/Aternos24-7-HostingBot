@@ -380,9 +380,10 @@ function createBot() {
     });
 
     const blockAtGuardTimer = setInterval(() => {
-      if (typeof bot.blockAt !== 'function') return;
-      const blockAt = bot.blockAt.bind(bot);
-      bot.blockAt = position => bot.world ? blockAt(position) : null;
+      if (!bot || typeof bot.blockAt !== 'function') return;
+      const guardedBot = bot;
+      const blockAt = guardedBot.blockAt.bind(guardedBot);
+      guardedBot.blockAt = position => guardedBot.world ? blockAt(position) : null;
       clearInterval(blockAtGuardTimer);
     }, 10);
     bot.once('spawn', () => clearInterval(blockAtGuardTimer));
