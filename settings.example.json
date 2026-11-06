@@ -64,6 +64,11 @@
     "chat": true,
     "console-commands": true
   },
+  "ai": {
+    "enabled": false,
+    "model": "gpt-4o-mini",
+    "apiUrl": "https://api.openai.com/v1/chat/completions"
+  },
   "combat": {
     "attack-mobs": true,
     "auto-eat": true

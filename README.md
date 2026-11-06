@@ -151,8 +151,29 @@ and fill in the required fields. The runtime intentionally reads
     "enabled": true,
     "password": "YourAuthPassword"
   }
+},
+"ai": {
+  "enabled": true,
+  "model": "gpt-4o-mini",
+  "apiUrl": "https://api.openai.com/v1/chat/completions"
 }
 ```
+
+For AI mode, set these as environment variables on the bot host. Do not put
+provider or dashboard secrets in `settings.json` or commit them:
+
+| Variable | What it does |
+|----------|--------------|
+| `AI_API_KEY` | API key for your model provider |
+| `AI_MODEL` | Optional model name; overrides `ai.model` |
+| `AI_API_URL` | Optional OpenAI-compatible chat-completions endpoint; overrides `ai.apiUrl` |
+| `DASHBOARD_TOKEN` | Required private token for submitting and stopping tasks from the dashboard |
+
+The configured provider must support OpenAI-compatible chat completions with
+tool/function calling. The bot uses the model to plan bounded actions, inspect
+inventory, gather blocks, craft items, and navigate nearby. AI mode does not
+run random movement, combat, or unsolicited chat modules. It is opt-in; with
+`ai.enabled` set to `false`, the existing AFK behavior remains in use.
 
 Add your Minecraft username to the tp whitelist so only you can move the bot:
 
@@ -163,6 +184,105 @@ Add your Minecraft username to the tp whitelist so only you can move the bot:
 ```
 
 Upload all the files to a new GitHub repository when done.
+
+---
+
+## Run on Termux, Windows, macOS, or proot
+
+The bot runs on Node.js and uses the same `npm start` command on each platform.
+Node.js 18 or newer is required; use a current Node.js LTS release when possible.
+Run the commands from the repository folder. Keep `settings.json` private.
+
+### Termux (Android)
+
+In the Termux app (install Termux from F-Droid or its official GitHub releases):
+
+```sh
+pkg update
+pkg install nodejs-lts git
+git clone https://github.com/itsdazzyprince3-sudo/Aternos24-7-HostingBot.git
+cd Aternos24-7-HostingBot
+cp settings.example.json settings.json
+nano settings.json
+npm install
+npm start
+```
+
+Keep Termux open while the bot runs. Android may stop background apps to save
+battery; allow Termux to run unrestricted in Android battery settings. A bot
+running on your phone also needs an active internet connection.
+
+### Linux inside Termux proot-distro
+
+You can run it directly in Termux as above; proot is optional. If you prefer a
+Linux distribution, install and enter one from Termux:
+
+```sh
+pkg update
+pkg install proot-distro
+proot-distro install ubuntu
+proot-distro login ubuntu
+```
+
+Then, inside the Linux shell, install Git and Node.js 18 or newer using that
+distribution's current package instructions. Confirm `node --version` is at
+least 18 before installing the bot:
+
+```sh
+apt update
+apt install -y git nodejs npm
+git clone https://github.com/itsdazzyprince3-sudo/Aternos24-7-HostingBot.git
+cd Aternos24-7-HostingBot
+cp settings.example.json settings.json
+nano settings.json
+npm install
+npm start
+```
+
+If the distribution's `nodejs` package is older than version 18, install a
+supported Node.js LTS version before running `npm install`. Proot does not keep
+processes running after the Termux/proot session or Android itself is stopped.
+
+### Windows PowerShell
+
+Install Node.js LTS, open PowerShell in the repository folder, and run:
+
+```powershell
+Copy-Item settings.example.json settings.json
+notepad settings.json
+npm.cmd install
+npm.cmd start
+```
+
+PowerShell may block the `npm.ps1` wrapper due to the system execution policy.
+Using `npm.cmd` avoids changing that policy. You can also use `node index.js`
+after installing dependencies.
+
+### Windows Command Prompt
+
+Install Node.js LTS, open Command Prompt in the repository folder, and run:
+
+```bat
+copy settings.example.json settings.json
+notepad settings.json
+npm install
+npm start
+```
+
+### macOS Terminal
+
+Install Node.js LTS (for example, with Homebrew), then run:
+
+```sh
+brew install node
+cp settings.example.json settings.json
+open -e settings.json
+npm install
+npm start
+```
+
+On any of these systems, stop the bot with `Ctrl+C`. To run the automated tests,
+use `npm test` (or `npm.cmd test` in PowerShell).
 
 ---
 
@@ -318,6 +438,10 @@ This keeps your passwords off GitHub.
 | BOT_USERNAME      | The bot's Minecraft username              |
 | BOT_PASSWORD      | The bot's Minecraft password (if needed)  |
 | BOT_AUTH_PASSWORD | The password for /login on the server     |
+| AI_API_KEY        | Model provider API key (AI mode)           |
+| AI_MODEL          | Optional model name override               |
+| AI_API_URL        | Optional OpenAI-compatible API URL         |
+| DASHBOARD_TOKEN   | Required to control bot tasks from dashboard |
 | PORT              | The port for the web dashboard (optional) |
 
 ---
@@ -330,13 +454,46 @@ It shows whether the bot is connected, its uptime, coordinates, and server IP.
 Visit /tutorial on the same URL for a quick setup reminder.
 Visit /health for a raw JSON status response.
 Visit /ping to confirm the service is running.
+When AI mode is enabled, use the instruction box on the dashboard to give the
+bot a goal. The dashboard control token is required because the dashboard may
+be internet-accessible. Tasks are limited to 30 model actions, and a task can
+be stopped from the same page.
+
+If the bot is disconnected, /health and the dashboard show the most recent
+server kick or disconnect reason. Reconnect backoff now persists across short
+connections; the bot cannot prevent server-host shutdowns, authentication
+failures, unsupported protocol versions, bans, or server anti-bot policies.
+
+### Troubleshooting protocol parse errors
+
+If the log contains `Parse error for play.toClient` with a packet ID, the client
+could not decode a server packet. Check that `server.version` matches the
+version advertised by your server first. For example, packet ID 75 is
+`recipe_book_add` when using the native 26.3 protocol.
+
+To temporarily include the full hex for small failed packets while testing in
+PowerShell:
+
+```powershell
+$env:MINECRAFT_PROTOCOL_DEBUG_FRAMES = "1"
+npm.cmd start
+```
+
+The setting only applies to that PowerShell window; remove it afterward with:
+
+```powershell
+$env:MINECRAFT_PROTOCOL_DEBUG_FRAMES = $null
+```
+
+The full frame is printed only for failed packets no larger than 512 bytes.
+Do not post logs publicly; send the complete parse error and `frameHex` privately
+when asking for help, since packet contents can include server data.
 
 ---
 
 ## Testing
 
-Run the following commands after copying `settings.example.json` to a private
-`settings.json` and filling in an authorized test server:
+Run the automated checks without a server configuration:
 
 ```bash
 npm ci
@@ -344,10 +501,11 @@ npm test
 npm ls --depth=0
 ```
 
-`npm test` currently performs a JavaScript syntax check. Protocol-level login,
-handshake, packet, and dashboard regression tests require a private test
-environment and are not implied by a passing syntax check. Do not use a public
-server or bypass authentication and hosting restrictions.
+The tests cover native 26.3 protocol and data compatibility, packet decoding,
+and version selection. To start the bot and connect to a server, separately copy
+`settings.example.json` to a private `settings.json` and configure an authorized
+test server. Do not use a public server or bypass authentication and hosting
+restrictions.
 
 ---
 
@@ -367,6 +525,9 @@ server or bypass authentication and hosting restrictions.
 | movement.circle-walk.radius | How wide the circle is in blocks |
 | modules.combat | Bot attacks nearby mobs |
 | modules.avoidMobs | Bot runs from mobs (turn off if combat is on) |
+| ai.enabled | Enable instruction-driven AI mode instead of AFK modules |
+| ai.model | Model name for the configured OpenAI-compatible API |
+| ai.apiUrl | Chat-completions API URL; can be overridden with AI_API_URL |
 | discord.enabled | Send connect/disconnect events to Discord |
 | discord.webhookUrl | Your Discord webhook URL |
 | chat.tpWhitelist | Usernames allowed to use the !tp command |

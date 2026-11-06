@@ -1,16 +1,24 @@
 'use strict';
 
 require('./lib/protocol-compat');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
 const mineflayer = require('mineflayer');
 const { Movements, pathfinder, goals } = require('mineflayer-pathfinder');
 const { GoalBlock } = goals;
-const config = require('./settings.json');
+const { AIAgent } = require('./lib/ai-agent');
+const settingsPath = require('node:path').join(__dirname, 'settings.json');
+if (!fs.existsSync(settingsPath)) {
+  throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
+}
+const config = require(settingsPath);
 const express = require('express');
 const http = require('http');
 const https = require('https');
 const { resolveBotVersion } = require('./lib/version');
 
 const app = express();
+app.use(express.json({ limit: '8kb' }));
 const PORT = process.env.PORT || 5000;
 
 let bot = null;
@@ -24,9 +32,26 @@ let botState = {
   lastActivity: Date.now(),
   reconnectAttempts: 0,
   startTime: Date.now(),
+  lastDisconnectReason: null,
   errors: [],
   wasThrottled: false
 };
+
+const aiAgent = new AIAgent({
+  config: config.ai || {},
+  getBot: () => bot,
+  isConnected: () => botState.connected
+});
+
+function hasDashboardAccess(req) {
+  const expected = process.env.DASHBOARD_TOKEN;
+  const provided = req.get('x-dashboard-token') || '';
+  if (!expected) return false;
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(provided);
+  return expectedBuffer.length === providedBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, providedBuffer);
+}
 
 function formatUptime(seconds) {
   const h = Math.floor(seconds / 3600);
@@ -113,6 +138,11 @@ app.get('/', (req, res) => {
             box-shadow: 0 0 20px rgba(45,212,191,0.4); width: 100%; box-sizing: border-box;
           }
           .btn:hover { transform: translateY(-2px); box-shadow: 0 0 30px rgba(45,212,191,0.6); filter: brightness(1.1); }
+          textarea, input { width: 100%; box-sizing: border-box; background: #0f172a; border: 1px solid #475569; border-radius: 0.6rem; color: var(--text-main); padding: 0.75rem; font: inherit; margin: 0.4rem 0 0.8rem; }
+          textarea { min-height: 90px; resize: vertical; }
+          button { cursor: pointer; border: 0; }
+          .ai-status { font-size: 0.9rem; color: var(--text-dim); overflow-wrap: anywhere; }
+          .disconnect-reason { color: #fca5a5; font-size: 0.85rem; overflow-wrap: anywhere; }
           .footer { margin-top: 1.5rem; font-size: 0.8125rem; color: #4b5563; }
         </style>
       </head>
@@ -140,6 +170,21 @@ app.get('/', (req, res) => {
             <div class="label">Server</div>
             <div class="value" style="font-size:1.1rem;color:#5eead4;">${config.server.ip}</div>
           </div>
+          <div class="card" id="disconnect-card" hidden>
+            <div class="label">Last disconnect reason</div>
+            <div class="disconnect-reason" id="disconnect-reason"></div>
+          </div>
+          <div class="card">
+            <div class="label">AI instruction</div>
+            <p class="ai-status">${config.ai?.enabled ? 'AI mode is enabled. Random AFK movement and combat are disabled while it follows your instruction.' : 'AI mode is disabled. Enable it in settings.json and configure the model API before submitting tasks.'}</p>
+            <label for="dashboard-token">Dashboard control token</label>
+            <input id="dashboard-token" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN">
+            <label for="instruction">What should the bot do?</label>
+            <textarea id="instruction" maxlength="500" placeholder="Mine enough stone for a furnace"></textarea>
+            <button class="btn" id="submit-instruction" type="button">Start instruction</button>
+            <button class="btn" id="stop-instruction" type="button">Stop</button>
+            <p class="ai-status" id="ai-status">Enter your dashboard control token to view task status.</p>
+          </div>
           <a href="/tutorial" class="btn">View Setup Guide</a>
           <div class="footer">Auto-refreshing every 5s</div>
         </div>
@@ -148,6 +193,8 @@ app.get('/', (req, res) => {
           const statusDot  = document.getElementById('status-dot');
           const uptimeText = document.getElementById('uptime-text');
           const coordsText = document.getElementById('coords-text');
+          const disconnectCard = document.getElementById('disconnect-card');
+          const disconnectReason = document.getElementById('disconnect-reason');
 
           function formatUptime(s) {
             const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -171,6 +218,10 @@ app.get('/', (req, res) => {
               } else {
                 coordsText.innerText = 'Searching Position...';
               }
+              if (data.lastDisconnectReason) {
+                disconnectReason.innerText = data.lastDisconnectReason;
+                disconnectCard.hidden = false;
+              }
             } catch (e) {
               statusText.innerText = 'System Offline';
               statusDot.className = 'dot offline';
@@ -179,6 +230,54 @@ app.get('/', (req, res) => {
 
           setInterval(update, 5000);
           update();
+
+          const instructionInput = document.getElementById('instruction');
+          const dashboardTokenInput = document.getElementById('dashboard-token');
+          const aiStatus = document.getElementById('ai-status');
+          async function aiRequest(path, body) {
+            const headers = { 'x-dashboard-token': dashboardTokenInput.value };
+            if (body) headers['Content-Type'] = 'application/json';
+            const response = await fetch(path, {
+              method: body ? 'POST' : 'GET',
+              headers,
+              body: body ? JSON.stringify(body) : undefined
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Request failed.');
+            return result;
+          }
+          async function refreshAIStatus() {
+            if (!dashboardTokenInput.value) return;
+            try {
+              const result = await aiRequest('/api/agent/status');
+              const latestActions = (result.actions || []).slice(-3)
+                .map(action => action.action + ': ' + action.result).join(' | ');
+              aiStatus.innerText = result.message + ' (' + result.status + ')' +
+                (latestActions ? ' - ' + latestActions : '');
+            } catch (error) {
+              aiStatus.innerText = error.message;
+            }
+          }
+          if (instructionInput) {
+            document.getElementById('submit-instruction').addEventListener('click', async () => {
+              try {
+                const result = await aiRequest('/api/instruction', { instruction: instructionInput.value });
+                aiStatus.innerText = result.message + ' (' + result.status + ')';
+              } catch (error) {
+                aiStatus.innerText = error.message;
+              }
+            });
+            document.getElementById('stop-instruction').addEventListener('click', async () => {
+              try {
+                const result = await aiRequest('/api/agent/stop', {});
+                aiStatus.innerText = result.message + ' (' + result.status + ')';
+              } catch (error) {
+                aiStatus.innerText = error.message;
+              }
+            });
+            dashboardTokenInput.addEventListener('change', refreshAIStatus);
+            setInterval(refreshAIStatus, 5000);
+          }
         </script>
       </body>
     </html>
@@ -253,9 +352,41 @@ app.get('/health', (req, res) => {
     uptime: Math.floor((Date.now() - botState.startTime) / 1000),
     coords: (bot && bot.entity) ? bot.entity.position : null,
     lastActivity: botState.lastActivity,
+    lastDisconnectReason: botState.lastDisconnectReason,
     reconnectAttempts: botState.reconnectAttempts,
     memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024
   });
+});
+
+app.get('/api/agent/status', (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  res.json(aiAgent.getStatus());
+});
+
+app.post('/api/instruction', (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  if (!botState.connected) {
+    return res.status(503).json({ error: 'The Minecraft bot is not connected yet.' });
+  }
+  try {
+    res.status(202).json(aiAgent.start(req.body?.instruction));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/agent/stop', (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  res.json(aiAgent.stop());
 });
 
 app.get('/ping', (req, res) => res.send('pong'));
@@ -394,16 +525,24 @@ function createBot() {
     bot.loadPlugin(pathfinder);
 
     clearBotTimeouts();
+    const connectingBot = bot;
     connectionTimeoutId = setTimeout(() => {
-      if (!botState.connected) {
+      if (bot === connectingBot && !botState.connected) {
         console.log('[Bot] Connection timeout - no spawn received');
-        try { bot.removeAllListeners(); bot.end(); } catch (e) {  }
+        try {
+          bot.removeAllListeners();
+          bot.end();
+        } catch (error) {
+          console.log(`[Bot] Connection timeout cleanup failed: ${error.message}`);
+        }
         bot = null;
         scheduleReconnect();
       }
     }, 150000);
 
     let spawnHandled = false;
+    let connectedAt = 0;
+    let kickedReason = null;
 
     bot.once('spawn', () => {
       if (spawnHandled) return;
@@ -412,7 +551,7 @@ function createBot() {
       clearBotTimeouts();
       botState.connected = true;
       botState.lastActivity = Date.now();
-      botState.reconnectAttempts = 0;
+      connectedAt = Date.now();
       isReconnecting = false;
 
       console.log(`[Bot] Spawned on server (version: ${bot.version})`);
@@ -431,7 +570,7 @@ function createBot() {
       initializeModules(bot, mcData, defaultMove, authPassword);
 
       setTimeout(() => {
-        if (bot && botState.connected && config.server['try-creative']) {
+        if (bot && botState.connected && !config.ai?.enabled && config.server['try-creative']) {
           bot.chat('/gamemode creative');
           console.log('[INFO] Attempted creative mode (requires OP)');
         }
@@ -449,8 +588,10 @@ function createBot() {
 
     bot.on('kicked', (reason) => {
       const kickReason = typeof reason === 'object' ? JSON.stringify(reason) : reason;
+      kickedReason = String(kickReason || 'Unknown');
       console.log(`[Bot] Kicked: ${kickReason}`);
       botState.connected = false;
+      botState.lastDisconnectReason = kickedReason;
       pushError({ type: 'kicked', reason: kickReason, time: Date.now() });
       clearAllIntervals();
 
@@ -463,17 +604,21 @@ function createBot() {
       if (config.discord?.events?.disconnect) {
         sendDiscordWebhook(`Kicked: ${kickReason}`, 0xff0000);
       }
-
+      scheduleReconnect();
     });
 
     bot.on('end', (reason) => {
-      console.log(`[Bot] Disconnected: ${reason || 'Unknown'}`);
+      const disconnectReason = kickedReason || String(reason || 'Unknown');
+      console.log(`[Bot] Disconnected: ${disconnectReason}`);
       botState.connected = false;
+      botState.lastDisconnectReason = disconnectReason;
+      if (connectedAt && Date.now() - connectedAt >= 60000) botState.reconnectAttempts = 0;
+      connectedAt = 0;
       clearAllIntervals();
       spawnHandled = false;
 
       if (config.discord?.events?.disconnect) {
-        sendDiscordWebhook(`Disconnected: ${reason || 'Unknown'}`, 0xf87171);
+        sendDiscordWebhook(`Disconnected: ${disconnectReason}`, 0xf87171);
       }
 
       scheduleReconnect();
@@ -494,11 +639,23 @@ function createBot() {
 }
 
 function scheduleReconnect() {
-  clearBotTimeouts();
-
   if (isReconnecting) {
     console.log('[Bot] Reconnect already scheduled, skipping duplicate.');
     return;
+  }
+
+  if (config.utils['auto-reconnect'] === false) {
+    if (connectionTimeoutId) {
+      clearTimeout(connectionTimeoutId);
+      connectionTimeoutId = null;
+    }
+    console.log('[Bot] Auto-reconnect is disabled in settings.');
+    return;
+  }
+
+  if (connectionTimeoutId) {
+    clearTimeout(connectionTimeoutId);
+    connectionTimeoutId = null;
   }
 
   isReconnecting = true;
@@ -549,6 +706,12 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
         authHandled = true;
       }
     }, 10000);
+  }
+
+  if (config.ai?.enabled) {
+    bot.pathfinder.setMovements(defaultMove);
+    console.log('[AI] AI mode enabled; random movement, combat, and unsolicited chat are disabled.');
+    return;
   }
 
   if (config.utils['chat-messages']?.enabled) {
