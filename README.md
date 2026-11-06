@@ -504,8 +504,12 @@ $env:MINECRAFT_PROTOCOL_DEBUG_FRAMES = $null
 ```
 
 The full frame is printed only for failed packets no larger than 512 bytes.
-Do not post logs publicly; send the complete parse error and `frameHex` privately
-when asking for help, since packet contents can include server data.
+Length-delimited packets that fail only with a partial-read/schema error are
+logged and skipped so one malformed packet does not immediately close the
+connection. Other malformed protocol errors still close it. Skipping a packet
+can affect that feature (for example, packet 75 may contain recipe-book data).
+Do not post logs publicly; send the complete parse error and `frameHex`
+privately when asking for help, since packet contents can include server data.
 
 ---
 

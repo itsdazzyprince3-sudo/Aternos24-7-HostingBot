@@ -5,6 +5,7 @@ require('../lib/protocol-compat');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { FullPacketParser } = require('protodef');
+const { createDeserializer } = require('minecraft-protocol/src/transforms/serializer');
 
 test('malformed framed packets fail with packet ID and state context', () => {
   const parser = new FullPacketParser({
@@ -31,6 +32,29 @@ test('malformed framed packets fail with packet ID and state context', () => {
     frameBytes: 3,
     prefixHex: '2a0102'
   });
+});
+
+test('26.3 partial recipe-book packet is skipped without dropping the connection', () => {
+  const parser = createDeserializer({ state: 'play', isServer: false, version: '26.3' });
+  const originalError = console.error;
+  const logged = [];
+  console.error = message => logged.push(message);
+  let transformError;
+  let pushed = false;
+  parser.push = () => { pushed = true; };
+
+  try {
+    parser._transform(Buffer.from([0x4b]), null, error => {
+      transformError = error;
+    });
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.equal(transformError, undefined);
+  assert.equal(pushed, false);
+  assert.match(logged[0], /Skipping undecodable complete frame; keeping connection open/);
+  assert.match(logged[0], /packetId=75/);
 });
 
 test('full frame bytes are included only when explicitly enabled', () => {
