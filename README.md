@@ -16,6 +16,15 @@ it reconnects on its own using an exponential backoff so it does not spam the se
 A small web server runs alongside the bot. You can visit the URL your host gives
 you to see a live dashboard showing whether the bot is connected, its uptime,
 and its coordinates.
+The dashboard also provides token-protected keyboard and touch movement
+controls for the connected bot. It controls the Mineflayer bot; it is not a
+Minecraft game client and does not render a playable 3D world.
+
+For local use, start with `npm start`, open `http://127.0.0.1:5000`, and enter
+the same `DASHBOARD_TOKEN` you set before starting the process. Use W/A/S/D or
+the on-screen buttons to move; Space jumps, Shift sneaks, and Ctrl sprints.
+Manual input pauses the patrol until all controls are released. Held inputs
+automatically release if the dashboard stops sending its control heartbeat.
 
 ---
 
@@ -174,10 +183,10 @@ tool/function calling. The bot uses the model to plan bounded actions, inspect
 inventory, gather blocks, craft items, and navigate nearby. AI mode does not
 run random movement, combat, or unsolicited chat modules. It is opt-in; with
 `ai.enabled` set to `false`, the existing AFK behavior remains in use.
-When AFK movement is enabled, the patrol uses pathfinding to visit fixed
-waypoints and returns to its starting position at the end of each lap. It does
-not dig blocks to clear a route. Server-side AFK policies or shutdowns can
-still disconnect the bot.
+When AFK movement is enabled, each patrol lap uses randomized waypoints and
+pauses within the configured radius, then returns to the starting block before
+repeating. It does not dig blocks to clear a route. Server-side AFK policies
+or shutdowns can still disconnect the bot.
 
 Add your Minecraft username to the tp whitelist so only you can move the bot:
 
@@ -259,8 +268,8 @@ npm.cmd start
 ```
 
 PowerShell may block the `npm.ps1` wrapper due to the system execution policy.
-Using `npm.cmd` avoids changing that policy. You can also use `node index.js`
-after installing dependencies.
+Using `npm.cmd` avoids changing that policy. Start the dashboard and supervised
+bot with `npm.cmd start`.
 
 To start the bot in a separate PowerShell window and open its dashboard
 automatically, run this from the repository folder:
@@ -386,7 +395,7 @@ Setup takes about 30 minutes but you never have to touch it again.
    npm install
 8. Install pm2 to keep the bot running after you close SSH:
    sudo npm install -g pm2
-   pm2 start index.js --name afkbot
+   pm2 start npm --name afkbot -- start
    pm2 save
    pm2 startup
 9. The bot now runs permanently and restarts automatically if it crashes.
@@ -477,9 +486,9 @@ Visit /tutorial on the same URL for a quick setup reminder.
 Visit /health for a raw JSON status response.
 Visit /ping to confirm the service is running.
 When AI mode is enabled, use the instruction box on the dashboard to give the
-bot a goal. The dashboard control token is required because the dashboard may
-be internet-accessible. Tasks are limited to 30 model actions, and a task can
-be stopped from the same page.
+bot a goal. The dashboard control token is required for AI and movement controls
+because the dashboard may be internet-accessible. Tasks are limited to 30 model
+actions, and a task can be stopped from the same page.
 
 If the bot is disconnected, /health and the dashboard show the most recent
 server kick or disconnect reason. Reconnect backoff now persists across short

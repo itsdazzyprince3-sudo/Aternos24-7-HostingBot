@@ -5,9 +5,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const mineflayer = require('mineflayer');
 const { Movements, pathfinder, goals } = require('mineflayer-pathfinder');
-const { GoalBlock, GoalNear } = goals;
+const { GoalBlock } = goals;
 const { AIAgent } = require('./lib/ai-agent');
-const { createPatrolRoute } = require('./lib/patrol');
+const { runPatrol } = require('./lib/patrol');
+const { ManualControlSession } = require('./lib/manual-controls');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
 if (!fs.existsSync(settingsPath)) {
   throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
@@ -37,6 +38,16 @@ let botState = {
   errors: [],
   wasThrottled: false
 };
+
+const manualControlSession = new ManualControlSession({
+  getBot: () => bot,
+  isConnected: () => botState.connected,
+  onExpire: error => {
+    if (error) console.log(`[Controls] Failed to release expired inputs: ${error.message}`);
+    else console.log('[Controls] Input lease expired; released held controls.');
+  }
+});
+const manualControls = manualControlSession.active;
 
 const aiAgent = new AIAgent({
   config: config.ai || {},
@@ -143,6 +154,12 @@ app.get('/', (req, res) => {
           textarea { min-height: 90px; resize: vertical; }
           button { cursor: pointer; border: 0; }
           .ai-status { font-size: 0.9rem; color: var(--text-dim); overflow-wrap: anywhere; }
+          .control-help { color: var(--text-dim); font-size: 0.85rem; line-height: 1.5; }
+          .control-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; max-width: 260px; margin: 1rem auto; }
+          .control-key { min-height: 48px; border-radius: 0.6rem; background: #334155; color: var(--text-main); font: inherit; font-weight: 700; touch-action: none; user-select: none; }
+          .control-key:active, .control-key.active { background: var(--accent); color: #0f172a; }
+          .control-key:disabled { opacity: 0.45; cursor: not-allowed; }
+          .control-status { min-height: 1.2em; color: var(--text-dim); font-size: 0.85rem; }
           .disconnect-reason { color: #fca5a5; font-size: 0.85rem; overflow-wrap: anywhere; }
           .footer { margin-top: 1.5rem; font-size: 0.8125rem; color: #4b5563; }
         </style>
@@ -176,6 +193,20 @@ app.get('/', (req, res) => {
             <div class="disconnect-reason" id="disconnect-reason"></div>
           </div>
           <div class="card">
+            <div class="label">Manual bot controls</div>
+            <p class="control-help">Use W/A/S/D or hold the buttons. Space jumps, Shift sneaks, and Ctrl sprints. Manual movement pauses the patrol; releasing controls lets it resume.</p>
+            <div class="control-grid" aria-label="Movement controls">
+              <span></span><button class="control-key" type="button" data-control="forward">W / ↑</button><span></span>
+              <button class="control-key" type="button" data-control="left">A / ←</button>
+              <button class="control-key" type="button" data-control="back">S / ↓</button>
+              <button class="control-key" type="button" data-control="right">D / →</button>
+              <button class="control-key" type="button" data-control="jump">Jump</button>
+              <button class="control-key" type="button" data-control="sneak">Sneak</button>
+              <button class="control-key" type="button" data-control="sprint">Sprint</button>
+            </div>
+            <p class="control-status" id="control-status" aria-live="polite">Enter the dashboard token to enable controls.</p>
+          </div>
+          <div class="card">
             <div class="label">AI instruction</div>
             <p class="ai-status">${config.ai?.enabled ? 'AI mode is enabled. Random AFK movement and combat are disabled while it follows your instruction.' : 'AI mode is disabled. Enable it in settings.json and configure the model API before submitting tasks.'}</p>
             <label for="dashboard-token">Dashboard control token</label>
@@ -196,6 +227,17 @@ app.get('/', (req, res) => {
           const coordsText = document.getElementById('coords-text');
           const disconnectCard = document.getElementById('disconnect-card');
           const disconnectReason = document.getElementById('disconnect-reason');
+          const controlStatus = document.getElementById('control-status');
+          const controlButtons = [...document.querySelectorAll('[data-control]')];
+          const activeControls = new Set();
+          const keyControls = new Map([
+            ['w', 'forward'], ['arrowup', 'forward'],
+            ['s', 'back'], ['arrowdown', 'back'],
+            ['a', 'left'], ['arrowleft', 'left'],
+            ['d', 'right'], ['arrowright', 'right'],
+            [' ', 'jump'], ['spacebar', 'jump'],
+            ['shift', 'sneak'], ['control', 'sprint']
+          ]);
 
           function formatUptime(s) {
             const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -223,6 +265,9 @@ app.get('/', (req, res) => {
                 disconnectReason.innerText = data.lastDisconnectReason;
                 disconnectCard.hidden = false;
               }
+              if (data.status !== 'connected' && activeControls.size) {
+                releaseAllControls('Bot disconnected; movement keys released.');
+              }
             } catch (e) {
               statusText.innerText = 'System Offline';
               statusDot.className = 'dot offline';
@@ -247,6 +292,93 @@ app.get('/', (req, res) => {
             if (!response.ok) throw new Error(result.error || 'Request failed.');
             return result;
           }
+          let controlQueue = Promise.resolve();
+          function setControl(input, pressed) {
+            if (pressed && activeControls.has(input)) return;
+            if (!pressed && !activeControls.has(input)) return;
+            if (!dashboardTokenInput.value) {
+              controlStatus.innerText = 'Enter DASHBOARD_TOKEN to use movement controls.';
+              return;
+            }
+            if (pressed) activeControls.add(input);
+            else activeControls.delete(input);
+            controlButtons.forEach(button => {
+              button.classList.toggle('active', activeControls.has(button.dataset.control));
+            });
+            controlStatus.innerText = activeControls.size
+              ? 'Manual movement active: ' + [...activeControls].join(', ')
+              : 'Patrol will resume.';
+            controlQueue = controlQueue.then(async () => {
+              const result = await aiRequest('/api/control/input', { input, pressed });
+              controlStatus.innerText = result.message;
+            }).catch(error => {
+              controlStatus.innerText = error.message;
+              if (pressed) activeControls.delete(input);
+              else activeControls.add(input);
+              controlButtons.forEach(button => {
+                button.classList.toggle('active', activeControls.has(button.dataset.control));
+              });
+            });
+          }
+          function releaseAllControls(message) {
+            const held = [...activeControls];
+            activeControls.clear();
+            controlButtons.forEach(button => button.classList.remove('active'));
+            if (message) controlStatus.innerText = message;
+            if (!held.length || !dashboardTokenInput.value) return;
+            controlQueue = controlQueue.then(() =>
+              aiRequest('/api/control/release', {})
+            ).catch(error => {
+              controlStatus.innerText = error.message;
+            });
+          }
+          for (const button of controlButtons) {
+            const input = button.dataset.control;
+            button.addEventListener('pointerdown', event => {
+              event.preventDefault();
+              button.setPointerCapture(event.pointerId);
+              setControl(input, true);
+            });
+            button.addEventListener('pointerup', () => setControl(input, false));
+            button.addEventListener('pointercancel', () => setControl(input, false));
+            button.addEventListener('lostpointercapture', () => setControl(input, false));
+          }
+          document.addEventListener('keydown', event => {
+            if (event.target.matches('input, textarea, select, [contenteditable="true"]')) return;
+            const input = keyControls.get(event.key.toLowerCase());
+            if (!input) return;
+            event.preventDefault();
+            if (!event.repeat) setControl(input, true);
+          });
+          document.addEventListener('keyup', event => {
+            const input = keyControls.get(event.key.toLowerCase());
+            if (input) {
+              event.preventDefault();
+              setControl(input, false);
+            }
+          });
+          window.addEventListener('blur', () => releaseAllControls('Window unfocused; movement keys released.'));
+          window.addEventListener('pagehide', () => releaseAllControls('Page closed; movement keys released.'));
+          setInterval(() => {
+            if (!activeControls.size || !dashboardTokenInput.value) return;
+            controlQueue = controlQueue.then(async () => {
+              const result = await aiRequest('/api/control/heartbeat', {});
+              if (!result.active.length) {
+                activeControls.clear();
+                controlButtons.forEach(button => button.classList.remove('active'));
+                controlStatus.innerText = 'Movement lease expired; press a control again.';
+              }
+            }).catch(error => {
+              controlStatus.innerText = error.message;
+              releaseAllControls('Movement control connection lost; keys released.');
+            });
+          }, 1000);
+          dashboardTokenInput.addEventListener('input', () => {
+            const enabled = Boolean(dashboardTokenInput.value);
+            controlButtons.forEach(button => { button.disabled = !enabled; });
+            if (!enabled) releaseAllControls('Enter the dashboard token to enable controls.');
+          });
+          controlButtons.forEach(button => { button.disabled = true; });
           async function refreshAIStatus() {
             if (!dashboardTokenInput.value) return;
             try {
@@ -367,6 +499,54 @@ app.get('/api/agent/status', (req, res) => {
   res.json(aiAgent.getStatus());
 });
 
+app.post('/api/control/input', (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  if (!botState.connected || !bot) {
+    return res.status(503).json({ error: 'The Minecraft bot is not connected yet.' });
+  }
+  if (['working', 'paused'].includes(aiAgent.getStatus().status)) {
+    return res.status(409).json({ error: 'Stop the active AI instruction before using manual controls.' });
+  }
+  try {
+    const active = manualControlSession.set(req.body?.input, req.body?.pressed);
+    res.json({ active, message: active.length ? `Holding: ${active.join(', ')}` : 'Patrol will resume.' });
+  } catch (error) {
+    const status = error instanceof TypeError ? 400 : 500;
+    res.status(status).json({ error: error.message });
+  }
+});
+
+app.post('/api/control/release', (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  try {
+    manualControlSession.release();
+    res.json({ active: [], message: 'All movement keys released.' });
+  } catch (error) {
+    res.status(500).json({ error: `Could not release movement keys: ${error.message}` });
+  }
+});
+
+app.post('/api/control/heartbeat', (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  if (!botState.connected || !bot) {
+    return res.status(503).json({ error: 'The Minecraft bot is not connected yet.' });
+  }
+  try {
+    res.json({ active: manualControlSession.heartbeat() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/instruction', (req, res) => {
   if (!hasDashboardAccess(req)) {
     return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
@@ -478,6 +658,12 @@ function createBot() {
 
   if (bot) {
     clearAllIntervals();
+    try {
+      manualControlSession.release();
+    } catch (error) {
+      console.log(`[Controls] Could not release inputs before reconnect: ${error.message}`);
+      manualControlSession.disconnect();
+    }
     try { bot.removeAllListeners(); bot.end(); } catch (e) {
       console.log('[Cleanup] Error ending previous bot:', e.message);
     }
@@ -592,6 +778,7 @@ function createBot() {
       kickedReason = String(kickReason || 'Unknown');
       console.log(`[Bot] Kicked: ${kickReason}`);
       botState.connected = false;
+      manualControlSession.disconnect();
       botState.lastDisconnectReason = kickedReason;
       pushError({ type: 'kicked', reason: kickReason, time: Date.now() });
       clearAllIntervals();
@@ -612,6 +799,7 @@ function createBot() {
       const disconnectReason = kickedReason || String(reason || 'Unknown');
       console.log(`[Bot] Disconnected: ${disconnectReason}`);
       botState.connected = false;
+      manualControlSession.disconnect();
       botState.lastDisconnectReason = disconnectReason;
       if (connectedAt && Date.now() - connectedAt >= 60000) botState.reconnectAttempts = 0;
       connectedAt = 0;
@@ -742,17 +930,17 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
   if (config.utils['anti-afk']?.enabled) {
 
     addInterval(() => {
-      if (!bot || !botState.connected) return;
+      if (!bot || !botState.connected || manualControls.size) return;
       try { bot.swingArm(); } catch (e) { }
     }, 10000 + Math.floor(Math.random() * 50000));
 
     addInterval(() => {
-      if (!bot || !botState.connected) return;
+      if (!bot || !botState.connected || manualControls.size) return;
       try { bot.setQuickBarSlot(Math.floor(Math.random() * 9)); } catch (e) { }
     }, 30000 + Math.floor(Math.random() * 90000));
 
     addInterval(() => {
-      if (!bot || !botState.connected || typeof bot.setControlState !== 'function') return;
+      if (!bot || !botState.connected || manualControls.size || typeof bot.setControlState !== 'function') return;
       if (Math.random() > 0.9) {
         let count = 2 + Math.floor(Math.random() * 4);
         const doTeabag = () => {
@@ -852,48 +1040,37 @@ function startCircleWalk(currentBot, defaultMove) {
   const patrolBot = currentBot;
   const anchor = patrolBot.entity.position.floored();
   const settings = config.movement['circle-walk'];
-  const route = createPatrolRoute(anchor, settings.radius);
   const interval = Math.max(500, Number(settings.speed) || 3000);
   let stopped = false;
 
   patrolBot.once('end', () => { stopped = true; });
   patrolBot.pathfinder.setMovements(defaultMove);
 
-  const runPatrol = async () => {
-    while (!stopped && bot === patrolBot && botState.connected) {
-      if (config.ai.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)) {
-        await new Promise(resolve => setTimeout(resolve, interval));
-        continue;
-      }
-
-      for (const point of route) {
-        if (stopped || bot !== patrolBot || !botState.connected) return;
-        if (config.ai.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)) break;
-        try {
-          await patrolBot.pathfinder.goto(new GoalNear(point.x, point.y, point.z, 1));
-          botState.lastActivity = Date.now();
-        } catch (error) {
-          if (!stopped && bot === patrolBot && botState.connected) {
-            console.log(`[Patrol] Could not reach waypoint (${point.x}, ${point.y}, ${point.z}): ${error.message}`);
-          }
-        }
-        await new Promise(resolve => setTimeout(resolve, interval));
-      }
+  runPatrol({
+    anchor,
+    radius: settings.radius,
+    interval,
+    shouldStop: () => stopped || bot !== patrolBot || !botState.connected,
+    shouldPause: () => manualControls.size > 0 ||
+      (config.ai.enabled && ['working', 'paused'].includes(aiAgent.getStatus().status)),
+    goto: point => patrolBot.pathfinder.goto(new GoalBlock(point.x, point.y, point.z)),
+    onError: (error, point) => {
+      console.log(`[Patrol] Could not reach waypoint (${point.x}, ${point.y}, ${point.z}): ${error.message}`);
     }
-  };
-
-  runPatrol().catch(error => {
+  }).catch(error => {
     if (!stopped) console.log('[Patrol] Error:', error.message);
   });
 }
 
 function startRandomJump(bot) {
   addInterval(() => {
-    if (!bot || !botState.connected || typeof bot.setControlState !== 'function') return;
+    if (!bot || !botState.connected || manualControls.size || typeof bot.setControlState !== 'function') return;
     try {
       bot.setControlState('jump', true);
       setTimeout(() => {
-        if (bot && typeof bot.setControlState === 'function') bot.setControlState('jump', false);
+        if (bot && !manualControls.has('jump') && typeof bot.setControlState === 'function') {
+          bot.setControlState('jump', false);
+        }
       }, 300);
       botState.lastActivity = Date.now();
     } catch (e) {
@@ -904,7 +1081,7 @@ function startRandomJump(bot) {
 
 function startLookAround(bot) {
   addInterval(() => {
-    if (!bot || !botState.connected) return;
+    if (!bot || !botState.connected || manualControls.size) return;
     try {
       const yaw = (Math.random() * Math.PI * 2) - Math.PI;
       const pitch = (Math.random() * Math.PI / 2) - Math.PI / 4;
@@ -919,7 +1096,7 @@ function startLookAround(bot) {
 function avoidMobs(bot) {
   const safeDistance = 5;
   addInterval(() => {
-    if (!bot || !botState.connected || typeof bot.setControlState !== 'function') return;
+    if (!bot || !botState.connected || manualControls.size || typeof bot.setControlState !== 'function') return;
     try {
       const entities = Object.values(bot.entities).filter(e =>
         e.type === 'mob' || (e.type === 'player' && e.username !== bot.username)
@@ -929,7 +1106,9 @@ function avoidMobs(bot) {
         if (bot.entity.position.distanceTo(e.position) < safeDistance) {
           bot.setControlState('back', true);
           setTimeout(() => {
-            if (bot && typeof bot.setControlState === 'function') bot.setControlState('back', false);
+            if (bot && !manualControls.has('back') && typeof bot.setControlState === 'function') {
+              bot.setControlState('back', false);
+            }
           }, 500);
           break;
         }
@@ -946,7 +1125,7 @@ function combatModule(bot, mcData) {
   let lockedTargetExpiry = 0;
 
   bot.on('physicsTick', () => {
-    if (!bot || !botState.connected || !config.combat['attack-mobs']) return;
+    if (!bot || !botState.connected || manualControls.size || !config.combat['attack-mobs']) return;
     const now = Date.now();
     if (now - lastAttackTime < 620) return;
 
@@ -1147,6 +1326,12 @@ function shutdown(signal) {
   clearBotTimeouts();
   clearAllIntervals();
   if (bot) {
+    try {
+      manualControlSession.release();
+    } catch (err) {
+      console.log(`[Controls] Could not release inputs during shutdown: ${err.message}`);
+      manualControlSession.disconnect();
+    }
     try {
       bot.removeAllListeners();
       bot.end();
