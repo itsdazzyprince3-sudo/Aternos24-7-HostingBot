@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { MAX_MEMORY_NOTE_LENGTH } = require('../lib/ai-memory');
 const {
   createTrustedChatMemoryNote,
+  getAIChatAllowedUsers,
   isAIChatAuthorized,
   parseAIChatCommand
 } = require('../lib/ai-chat');
@@ -31,6 +32,17 @@ test('AI chat authorization matches configured usernames without case sensitivit
   assert.equal(isAIChatAuthorized(' ', ['virgo']), false);
   assert.equal(isAIChatAuthorized('OtherPlayer', ['virgo']), false);
   assert.equal(isAIChatAuthorized('Virgo', null), false);
+});
+
+test('AI command allowlist merges AI-specific and existing trusted chat users', () => {
+  assert.deepEqual(
+    getAIChatAllowedUsers(
+      { allowedUsers: [' Virgo ', 'ADMIN'] },
+      { tpWhitelist: ['virgo', 'Owner'] }
+    ),
+    ['virgo', 'admin', 'owner']
+  );
+  assert.deepEqual(getAIChatAllowedUsers({ allowedUsers: 'virgo' }, null), []);
 });
 
 test('trusted chat memory includes only allowlisted players and bounds note length', () => {

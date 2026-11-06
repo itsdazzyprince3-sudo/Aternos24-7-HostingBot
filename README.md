@@ -40,14 +40,15 @@ Google's current account and model limits.
 ### AI chat and survival behavior
 
 Set `ai.enabled` to `true` in your private `settings.json`, configure the model
-API in `.env`, and add trusted Minecraft usernames to `chat.tpWhitelist`.
-Only those names can send AI chat commands. Use `!ai <question or task>` in
+API in `.env`, and add trusted Minecraft usernames to `ai.allowedUsers` (or
+`chat.tpWhitelist`). Only those names can send AI chat commands. Use `!ai <question or task>` in
 Minecraft chat; `/ai <...>` is also accepted if your server forwards slash
 commands as chat. Examples: `!ai what is in my inventory?`, `!ai mine stone`,
 `!ai teach always keep three logs`, `!ai status`, `!ai recover`, and `!ai stop`.
 If Virgo logs that a sender is untrusted, add that exact Minecraft username to
-`chat.tpWhitelist` in the active `settings.json`, then restart the bot. Usernames
-are matched without case sensitivity or surrounding whitespace.
+`ai.allowedUsers` or `chat.tpWhitelist` in the active `settings.json`, then
+restart the bot. Startup logs show the trusted usernames loaded by that
+process. Usernames are matched without case sensitivity or surrounding whitespace.
 When `ai.autonomous.enabled` is enabled, Virgo gathers nearby surface logs,
 stone, and coal in bounded cycles. An authorized `!ai` task pauses autonomous
 gathering; use `!ai resume` to resume it, `!ai pause` to pause it, and `!ai stop`
