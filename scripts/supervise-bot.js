@@ -6,7 +6,7 @@ const { BotSupervisor } = require('../lib/bot-supervisor');
 
 const supervisor = new BotSupervisor({
   spawn,
-  command: process.execPath,
+  command: process.env.BOT_NODE_BINARY || 'node',
   args: [path.join(__dirname, '..', 'index.js')],
   env: process.env
 });
