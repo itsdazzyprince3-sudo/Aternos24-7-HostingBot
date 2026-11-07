@@ -17,6 +17,7 @@ const {
 const { isPatrolEnabled, runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
 const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
+const pluginLoader = require('./lib/plugin-loader');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
 if (!fs.existsSync(settingsPath)) {
   throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
@@ -45,6 +46,7 @@ let botState = {
   reconnectAttempts: 0,
   startTime: Date.now(),
   lastDisconnectReason: null,
+  serverOffline: false,
   errors: [],
   wasThrottled: false,
   duplicateLogin: false
@@ -87,6 +89,8 @@ const aiAgent = new AIAgent({
     sendAIChatMessage(message);
   }
 });
+
+pluginLoader.init({ config, aiAgent });
 
 function hasDashboardAccess(req) {
   const expected = process.env.DASHBOARD_TOKEN;
@@ -221,6 +225,11 @@ app.get('/', (req, res) => {
             <div class="label">Server</div>
             <div class="value" style="font-size:1.1rem;color:#5eead4;">${config.server.ip}</div>
           </div>
+          <div class="card" id="offline-warning-card" style="border-left: 4px solid #ef4444; background: #26171a;" hidden>
+            <div class="label" style="color: #ef4444;">⚠️ SERVER OFFLINE</div>
+            <div style="font-weight: 700; color: #fca5a5; margin-bottom: 0.35rem;">Minecraft Server is Offline!</div>
+            <div style="font-size: 0.85rem; color: #fecdd3; line-height: 1.4;">Please turn on your server in your host dashboard. The bot will NOT stop reconnecting and will connect automatically once the server is online.</div>
+          </div>
           <div class="card" id="disconnect-card" hidden>
             <div class="label">Last disconnect reason</div>
             <div class="disconnect-reason" id="disconnect-reason"></div>
@@ -283,6 +292,7 @@ app.get('/', (req, res) => {
           const coordsText = document.getElementById('coords-text');
           const disconnectCard = document.getElementById('disconnect-card');
           const disconnectReason = document.getElementById('disconnect-reason');
+          const offlineWarningCard = document.getElementById('offline-warning-card');
           const controlStatus = document.getElementById('control-status');
           const controlButtons = [...document.querySelectorAll('[data-control]')];
           const activeControls = new Set();
@@ -307,9 +317,15 @@ app.get('/', (req, res) => {
               if (data.status === 'connected') {
                 statusText.innerText = 'Online & Running';
                 statusDot.className = 'dot pulse';
+                if (offlineWarningCard) offlineWarningCard.hidden = true;
+              } else if (data.serverOffline) {
+                statusText.innerText = 'Server Offline (Retrying...)';
+                statusDot.className = 'dot offline pulse';
+                if (offlineWarningCard) offlineWarningCard.hidden = false;
               } else {
                 statusText.innerText = 'Reconnecting...';
                 statusDot.className = 'dot offline pulse';
+                if (offlineWarningCard) offlineWarningCard.hidden = true;
               }
               uptimeText.innerText = formatUptime(data.uptime);
               if (data.coords) {
@@ -400,7 +416,7 @@ app.get('/', (req, res) => {
             }
             try {
               const res = await aiRequest('/api/control/action', { action, payload });
-              controlStatus.innerText = res.message || `Action ${action} executed.`;
+              controlStatus.innerText = res.message || ('Action ' + action + ' executed.');
             } catch (err) {
               controlStatus.innerText = err.message;
             }
@@ -598,10 +614,13 @@ app.get('/tutorial', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: botState.connected ? 'connected' : 'disconnected',
+    serverOffline: Boolean(botState.serverOffline),
     uptime: Math.floor((Date.now() - botState.startTime) / 1000),
     coords: (bot && bot.entity) ? bot.entity.position : null,
     lastActivity: botState.lastActivity,
-    lastDisconnectReason: botState.lastDisconnectReason,
+    lastDisconnectReason: botState.serverOffline
+      ? '⚠️ Server is OFFLINE. Please turn on your server! (Bot will keep reconnecting automatically)'
+      : botState.lastDisconnectReason,
     reconnectAttempts: botState.reconnectAttempts,
     memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024
   });
@@ -782,6 +801,29 @@ function isDuplicateLoginReason(reason) {
     text.includes('already connected');
 }
 
+function isServerOfflineError(reason) {
+  const text = String(reason?.message || reason?.code || reason || '').toLowerCase();
+  return (
+    text.includes('econnrefused') ||
+    text.includes('connect econnrefused') ||
+    text.includes('econnreset') ||
+    text.includes('write econnreset') ||
+    text.includes('socketclosed') ||
+    text.includes('socket closed') ||
+    text.includes('enotfound') ||
+    text.includes('etimedout') ||
+    text.includes('ehostunreach') ||
+    text.includes('ehostdown') ||
+    text.includes('enetunreach') ||
+    text.includes('connection refused') ||
+    text.includes('no spawn received') ||
+    text.includes('server offline') ||
+    text.includes('timed out') ||
+    text.includes('could not connect') ||
+    text.includes('failed to ping')
+  );
+}
+
 function getReconnectDelay() {
   if (botState.duplicateLogin) {
     botState.duplicateLogin = false;
@@ -851,7 +893,7 @@ function createBot() {
       host: config.server.ip,
       port: config.server.port,
       version: botVersion,
-      hideErrors: false,
+      hideErrors: true,
       respawn: true,
       checkTimeoutInterval: 600000
     });
@@ -875,7 +917,9 @@ function createBot() {
     const connectingBot = bot;
     connectionTimeoutId = setTimeout(() => {
       if (bot === connectingBot && !botState.connected) {
-        console.log('[Bot] Connection timeout - no spawn received');
+        botState.serverOffline = true;
+        botState.lastDisconnectReason = 'Server did not respond (offline). Please turn on your server!';
+        console.warn(`[Bot] ⚠️ WARNING: Server (${config.server.ip}:${config.server.port}) did not respond and appears to be OFFLINE. Please turn on your server! Virgo will keep reconnecting.`);
         try {
           bot.removeAllListeners();
           bot.end();
@@ -898,11 +942,13 @@ function createBot() {
 
       clearBotTimeouts();
       botState.connected = true;
+      botState.serverOffline = false;
       botState.lastActivity = Date.now();
       connectedAt = Date.now();
       isReconnecting = false;
 
       console.log(`[Bot] Spawned on server (version: ${bot.version})`);
+      pluginLoader.onBotReady(bot);
 
       if (config.discord?.events?.connect) {
         sendDiscordWebhook(`Connected to \`${config.server.ip}\``, 0x4ade80);
@@ -986,9 +1032,14 @@ function createBot() {
     bot.on('end', (reason) => {
       const disconnectReason = kickedReason || String(reason || 'Unknown');
       console.log(`[Bot] Disconnected: ${disconnectReason}`);
+      pluginLoader.onBotEnd(bot);
       botState.connected = false;
       manualControlSession.disconnect();
       botState.lastDisconnectReason = disconnectReason;
+      if (isServerOfflineError(disconnectReason)) {
+        botState.serverOffline = true;
+        console.warn(`[Bot] ⚠️ WARNING: Minecraft server (${config.server.ip}:${config.server.port}) is OFFLINE! Please turn on the server. Continuing to reconnect in the background...`);
+      }
       if (connectedAt && Date.now() - connectedAt >= 60000) botState.reconnectAttempts = 0;
       connectedAt = 0;
       clearAllIntervals();
@@ -1011,11 +1062,19 @@ function createBot() {
       const protocolVersion = bot?.version || 'unknown';
       console.log(`[Bot] Error (version=${protocolVersion}, state=${protocolState}): ${err.message}`);
       pushError({ type: 'error', message: err.message, time: Date.now() });
-
+      if (isServerOfflineError(err)) {
+        botState.serverOffline = true;
+        botState.lastDisconnectReason = 'Minecraft server is offline. Please turn on your server!';
+        console.warn(`[Bot] ⚠️ WARNING: Minecraft server (${config.server.ip}:${config.server.port}) is OFFLINE! Please turn on the server. Continuing to reconnect in the background...`);
+      }
     });
 
   } catch (err) {
     console.log(`[Bot] Failed to create bot: ${err.message}`);
+    if (isServerOfflineError(err)) {
+      botState.serverOffline = true;
+      console.warn(`[Bot] ⚠️ WARNING: Minecraft server (${config.server.ip}:${config.server.port}) is OFFLINE! Please turn on the server. Continuing reconnect loop...`);
+    }
     scheduleReconnect();
   }
 }
@@ -1044,7 +1103,11 @@ function scheduleReconnect() {
   botState.reconnectAttempts++;
 
   const delay = getReconnectDelay();
-  console.log(`[Bot] Reconnecting in ${delay / 1000}s (attempt #${botState.reconnectAttempts})`);
+  if (botState.serverOffline) {
+    console.log(`[Bot] ⚠️ Server is offline — waiting ${Math.round(delay / 1000)}s before reconnect attempt #${botState.reconnectAttempts} (will keep retrying until server starts)...`);
+  } else {
+    console.log(`[Bot] Reconnecting in ${delay / 1000}s (attempt #${botState.reconnectAttempts})`);
+  }
 
   reconnectTimeoutId = setTimeout(() => {
     reconnectTimeoutId = null;
@@ -1487,7 +1550,7 @@ function chatModule(bot) {
         }
         try {
           if (aiCommand.type === 'help') {
-            sendAIChatMessage('Use !ai <task>, !ai recognize, !ai research <topic>, !ai knowledge [query], !ai train, !ai train status, !ai stop training, !ai skills <search>, !ai skill <id> [count], !ai think <goal>, !ai solve <goal>, !ai brain, !ai why, !ai teach <rule>, !ai memory, !ai forget <text>, !ai status, !ai pause, !ai resume, or !ai stop.');
+            sendAIChatMessage('Use !ai <task>, !ai recognize, !ai research <topic>, !ai knowledge [query], !ai train, !ai train status, !ai stop training, !ai skills <search>, !ai skill <id> [count], !ai think <goal>, !ai solve <goal>, !ai brain, !ai why, !ai teach <rule>, !ai memory, !ai forget <text>, !ai status, !ai pause, !ai resume, !ai plugins, or !ai stop.');
           } else if (aiCommand.type === 'status') {
             const status = aiAgent.getStatus();
             const grinding = aiAgent.autonomyActive ? 'Autonomous gathering is enabled.' : 'Autonomous gathering is paused.';
@@ -1512,6 +1575,19 @@ function chatModule(bot) {
             }).catch(error => {
               sendAIChatMessage(`Recovery paused: ${error.message}`);
             });
+          } else if (aiCommand.type === 'plugins') {
+            const sub = (aiCommand.text || '').toLowerCase();
+            if (sub === 'reload') {
+              const r = pluginLoader.reload();
+              sendAIChatMessage(`Plugins reloaded. Before: ${r.before}. After: ${r.after}.`);
+            } else {
+              const list = pluginLoader.list();
+              if (!list.length) {
+                sendAIChatMessage('No plugins loaded. Drop .js files in the plugins/ folder, then say !ai plugins reload.');
+              } else {
+                sendAIChatMessage(`Plugins (${list.length}): ${list.map(p => p.name + (p.commands.length ? ' [!' + p.commands.join(', !') + ']' : '')).join(', ')}. Say !ai plugins reload to rescan.`);
+              }
+            }
           } else {
             const isQuestion = /\?$/.test(aiCommand.text) ||
               /^(?:who|what|how|why|when|where|which|can|could|would|will|is|are|does|do|did|tell|joke|calc|calculate|recipe|status|help)\b/i.test(aiCommand.text);
@@ -1525,6 +1601,10 @@ function chatModule(bot) {
         }
         return;
       }
+
+      // Bot-side plugin command dispatch (e.g. !<plugincommand>) and chat hooks.
+      if (pluginLoader.handleChatCommand(message, username)) return;
+      try { pluginLoader.onChat(username, message); } catch (e) { console.error(`[Plugins] onChat: ${e.message}`); }
 
       if (config.discord?.enabled && config.discord?.events?.chat) {
         sendDiscordWebhook(`${username}: ${message}`, 0x7289da);

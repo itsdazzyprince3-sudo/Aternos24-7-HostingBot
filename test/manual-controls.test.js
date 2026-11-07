@@ -114,3 +114,19 @@ test('performManualAction executes drop, attack, use, slot, and look', async () 
   assert.equal(lookRes.action, 'look');
   assert.deepEqual(actions[4], ['look', 1.2, -0.4]);
 });
+
+test('index.js passes full JavaScript syntax compilation without errors', () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const code = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.doesNotThrow(() => {
+    new vm.Script(code, { filename: 'index.js' });
+  });
+
+  // Verify server offline keywords and reconnection warning logic exist
+  assert.ok(code.includes('isServerOfflineError'));
+  assert.ok(code.includes('offline-warning-card'));
+  assert.ok(code.includes('Minecraft Server is Offline!'));
+  assert.ok(code.includes('econnrefused'));
+});
