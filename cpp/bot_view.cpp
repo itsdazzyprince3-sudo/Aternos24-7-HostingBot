@@ -26,6 +26,7 @@
 // ---- config ----
 static int RES_W = 480, RES_H = 270;
 static float FOV = 1.2217f; // 70 deg
+static float YAW_SIGN = 1.0f, PITCH_SIGN = 1.0f; // flip to -1 if view is mirrored for your protocol
 static std::string FRAME_HOST = "127.0.0.1";
 static int FRAME_PORT = 31337;
 static int HTTP_PORT = 8080;
@@ -98,7 +99,8 @@ static void renderFrame(const Frame& f, std::vector<uint8_t>& fb, int W,int H){
   // eye in grid space
   float e[3] = { f.eye[0]-f.origin[0], f.eye[1]-f.origin[1], f.eye[2]-f.origin[2] };
   // forward from yaw/pitch (convention; flip signs here if view is mirrored)
-  float fwd[3] = { sinf(f.yaw)*cosf(f.pitch), -sinf(f.pitch), cosf(f.yaw)*cosf(f.pitch) };
+  float yaw = f.yaw * YAW_SIGN, pitch = f.pitch * PITCH_SIGN;
+  float fwd[3] = { sinf(yaw)*cosf(pitch), -sinf(pitch), cosf(yaw)*cosf(pitch) };
   normv(fwd);
   float upw[3]={0,1,0};
   if(fabsf(dot(fwd,upw))>0.99f){ upw[0]=0;upw[1]=0;upw[2]=1; }
@@ -259,8 +261,8 @@ static void renderer(){
     Frame f;
     { std::lock_guard<std::mutex> lk(g_mtx); f = g_frame; }
     if(MOCK && f.ts==0) f = mockFrame();
+    if(MOCK){ std::lock_guard<std::mutex> lk(g_mtx); g_frame = f; }
     if(f.ts!=0 || MOCK){
-      if(MOCK && f.ts==0){ std::lock_guard<std::mutex> lk(g_mtx); g_frame = f; }
       renderFrame(f, fb, W, H);
       { std::lock_guard<std::mutex> lk(g_fb_mtx); g_fb = fb; }
       frames++;
@@ -376,7 +378,11 @@ int main(int argc,char**argv){
     else if(a=="--http-port"&&i+1<argc) HTTP_PORT=atoi(argv[++i]);
     else if(a=="--w"&&i+1<argc) RES_W=atoi(argv[++i]);
     else if(a=="--h"&&i+1<argc) RES_H=atoi(argv[++i]);
+    else if(a=="--yaw-sign"&&i+1<argc) YAW_SIGN=(float)atof(argv[++i]);
+    else if(a=="--pitch-sign"&&i+1<argc) PITCH_SIGN=(float)atof(argv[++i]);
   }
+  if(const char* e=getenv("VIEW_YAW_SIGN")) YAW_SIGN=(float)atof(e);
+  if(const char* e=getenv("VIEW_PITCH_SIGN")) PITCH_SIGN=(float)atof(e);
   g_fb.assign((size_t)RES_W*RES_H*3, 0);
   std::thread(httpServer).detach();
   if(!MOCK) std::thread(frameClient).detach();

@@ -251,3 +251,23 @@ test('chat authorization and natural command parsing support all players', () =>
   assert.equal(parseAIChatCommand('hey virgo, mine 10 stone').text, 'mine 10 stone');
   assert.equal(parseAIChatCommand('bot: tell me a joke').text, 'tell me a joke');
 });
+
+test('sortChests parses natural intents and plans appropriate action', () => {
+  const p1 = parseLocalIntent('sort chests');
+  assert.equal(p1.type, 'sortChests');
+  assert.equal(p1.category, 'all');
+
+  const p2 = parseLocalIntent('organize inventory ores');
+  assert.equal(p2.type, 'sortChests');
+  assert.equal(p2.category, 'ores');
+
+  const p3 = parseLocalIntent('deposit crops');
+  assert.equal(p3.type, 'sortChests');
+  assert.equal(p3.category, 'crops');
+
+  const p4 = parseLocalIntent('store all');
+  assert.equal(p4.type, 'sortChests');
+
+  const plan = planForIntent({ type: 'sortChests', category: 'ores' });
+  assert.deepEqual(plan, [{ skill: 'sortChests', args: { category: 'ores' } }]);
+});

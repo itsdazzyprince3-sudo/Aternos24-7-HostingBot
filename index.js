@@ -14,11 +14,13 @@ const {
   parseAIChatCommand
 } = require('./lib/ai-chat');
 const { parseLocalIntent } = require('./lib/ai-brain');
+const { detectLanguage, reply: localizedReply } = require('./lib/ai-nlp');
 const { isPatrolEnabled, runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
 const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
 const pluginLoader = require('./lib/plugin-loader');
 const { FrameServer } = require('./lib/frame-server');
+const { VisionController } = require('./lib/vision-controller');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
 if (!fs.existsSync(settingsPath)) {
   throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
@@ -107,6 +109,27 @@ const viewFrameServer = (process.env.BOT_VIEW === '1' || config.view?.enabled ==
     })
   : null;
 if (viewFrameServer) viewFrameServer.start();
+
+// Vision-control loop: bot watches its rendered view and a vision model picks
+// actions. Needs the C++ viewer running (BOT_VIEW=1). Toggle in-game: !ai vision on/off.
+function createVisionController() {
+  return new VisionController({
+    getBot: () => bot,
+    isConnected: () => botState.connected,
+    viewerUrl: process.env.VIEWER_URL || config.vision?.viewerUrl || 'http://127.0.0.1:8080',
+    ollamaUrl: process.env.OLLAMA_URL || config.ai?.ollama?.url || 'http://127.0.0.1:11434/api/chat',
+    model: process.env.VISION_MODEL || config.vision?.model || 'llava',
+    intervalMs: Number(process.env.VISION_INTERVAL) || config.vision?.intervalMs || 4000,
+    dryRun: process.env.VISION_DRY === '1' || config.vision?.dryRun === true,
+    enabled: true,
+    onLog: (m) => console.log(`[Vision] ${m}`)
+  });
+}
+let visionController = null;
+if (process.env.BOT_VISION === '1' || config.vision?.enabled === true) {
+  visionController = createVisionController();
+  visionController.start();
+}
 
 function hasDashboardAccess(req) {
   const expected = process.env.DASHBOARD_TOKEN;
@@ -249,6 +272,43 @@ app.get('/', (req, res) => {
           <div class="card" id="disconnect-card" hidden>
             <div class="label">Last disconnect reason</div>
             <div class="disconnect-reason" id="disconnect-reason"></div>
+          </div>
+          <div class="card" id="radar-card">
+            <div class="label">Live Radar & Status</div>
+            <div style="display:flex;flex-wrap:wrap;gap:1.2rem;align-items:center;justify-content:center;margin-top:0.5rem;">
+              <div style="position:relative;width:240px;height:240px;background:#090d16;border-radius:50%;border:2px solid #334155;overflow:hidden;box-shadow:inset 0 0 20px rgba(0,0,0,0.8);">
+                <canvas id="radar-canvas" width="240" height="240"></canvas>
+              </div>
+              <div style="flex:1;min-width:180px;">
+                <div style="font-size:0.85rem;color:var(--text-dim);margin-bottom:4px;">Vitals:</div>
+                <div style="margin-bottom:8px;">
+                  <div style="display:flex;justify-content:space-between;font-size:0.75rem;margin-bottom:2px;">
+                    <span>Health</span><span id="vitals-hp">20 / 20</span>
+                  </div>
+                  <div style="background:#1e293b;border-radius:4px;height:10px;overflow:hidden;">
+                    <div id="hp-bar" style="background:#ef4444;height:100%;width:100%;transition:width 0.3s;"></div>
+                  </div>
+                </div>
+                <div style="margin-bottom:8px;">
+                  <div style="display:flex;justify-content:space-between;font-size:0.75rem;margin-bottom:2px;">
+                    <span>Food</span><span id="vitals-food">20 / 20</span>
+                  </div>
+                  <div style="background:#1e293b;border-radius:4px;height:10px;overflow:hidden;">
+                    <div id="food-bar" style="background:#f59e0b;height:100%;width:100%;transition:width 0.3s;"></div>
+                  </div>
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-dim);margin-top:8px;line-height:1.5;">
+                  <div>Held: <span id="held-item" style="color:var(--text-main);font-weight:600;">None</span></div>
+                  <div>Nearby: <span id="radar-summary" style="color:var(--text-main);">0 entities</span></div>
+                  <div>Legend: <span style="color:#38bdf8;">● Player</span> <span style="color:#ef4444;">● Hostile</span> <span style="color:#22c55e;">● Passive</span> <span style="color:#fbbf24;">● Item</span></div>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:14px;">
+              <div style="font-size:0.75rem;color:var(--text-dim);margin-bottom:4px;">Hotbar:</div>
+              <div id="hotbar-slots" style="display:grid;grid-template-columns:repeat(9,1fr);gap:4px;">
+              </div>
+            </div>
           </div>
           <div class="card">
             <div class="label">Manual bot controls</div>
@@ -559,6 +619,158 @@ app.get('/', (req, res) => {
             dashboardTokenInput.addEventListener('change', refreshAIStatus);
             setInterval(refreshAIStatus, 5000);
           }
+
+          const radarCanvas = document.getElementById('radar-canvas');
+          const radarCtx = radarCanvas ? radarCanvas.getContext('2d') : null;
+          const hpBar = document.getElementById('hp-bar');
+          const foodBar = document.getElementById('food-bar');
+          const vitalsHp = document.getElementById('vitals-hp');
+          const vitalsFood = document.getElementById('vitals-food');
+          const heldItemText = document.getElementById('held-item');
+          const radarSummary = document.getElementById('radar-summary');
+          const hotbarSlotsDiv = document.getElementById('hotbar-slots');
+
+          async function updateRadar() {
+            if (!radarCtx) return;
+            try {
+              const res = await fetch('/api/radar');
+              const data = await res.json();
+              if (!data.connected) {
+                radarCtx.clearRect(0, 0, 240, 240);
+                radarCtx.fillStyle = '#64748b';
+                radarCtx.font = '12px sans-serif';
+                radarCtx.textAlign = 'center';
+                radarCtx.fillText('Bot Disconnected', 120, 120);
+                if (radarSummary) radarSummary.innerText = 'Bot offline';
+                return;
+              }
+
+              const hp = data.health != null ? Math.round(data.health) : 20;
+              const food = data.food != null ? Math.round(data.food) : 20;
+              if (vitalsHp) vitalsHp.innerText = hp + ' / 20';
+              if (vitalsFood) vitalsFood.innerText = food + ' / 20';
+              if (hpBar) hpBar.style.width = Math.max(0, Math.min(100, (hp / 20) * 100)) + '%';
+              if (foodBar) foodBar.style.width = Math.max(0, Math.min(100, (food / 20) * 100)) + '%';
+              if (heldItemText) {
+                heldItemText.innerText = data.heldItem ? (data.heldItem.name.replace(/_/g, ' ') + ' (x' + data.heldItem.count + ')') : 'None';
+              }
+
+              if (hotbarSlotsDiv && Array.isArray(data.hotbar)) {
+                hotbarSlotsDiv.innerHTML = '';
+                data.hotbar.forEach(function(item, idx) {
+                  const el = document.createElement('div');
+                  el.style.background = item.selected ? '#0d9488' : '#1e293b';
+                  el.style.border = item.selected ? '2px solid #2dd4bf' : '1px solid #334155';
+                  el.style.borderRadius = '4px';
+                  el.style.padding = '4px 2px';
+                  el.style.textAlign = 'center';
+                  el.style.fontSize = '0.65rem';
+                  el.style.minHeight = '32px';
+                  el.style.display = 'flex';
+                  el.style.flexDirection = 'column';
+                  el.style.justifyContent = 'space-between';
+                  el.title = item.displayName || 'Slot ' + (idx + 1);
+
+                  const slotNum = document.createElement('span');
+                  slotNum.style.color = '#94a3b8';
+                  slotNum.style.fontSize = '0.6rem';
+                  slotNum.innerText = (idx + 1);
+
+                  const itemName = document.createElement('span');
+                  itemName.style.color = item.name ? '#f8fafc' : '#475569';
+                  itemName.style.overflow = 'hidden';
+                  itemName.style.textOverflow = 'ellipsis';
+                  itemName.style.whiteSpace = 'nowrap';
+                  itemName.innerText = item.name ? item.name.split('_')[0].slice(0, 5) : '-';
+
+                  const countSpan = document.createElement('span');
+                  countSpan.style.color = '#2dd4bf';
+                  countSpan.style.fontWeight = 'bold';
+                  countSpan.innerText = item.count > 1 ? item.count : '';
+
+                  el.appendChild(slotNum);
+                  el.appendChild(itemName);
+                  el.appendChild(countSpan);
+                  hotbarSlotsDiv.appendChild(el);
+                });
+              }
+
+              radarCtx.clearRect(0, 0, 240, 240);
+              const cx = 120, cy = 120;
+              const scale = 110 / 32;
+
+              radarCtx.strokeStyle = '#1e293b';
+              radarCtx.lineWidth = 1;
+              [8, 16, 24, 32].forEach(function(r) {
+                radarCtx.beginPath();
+                radarCtx.arc(cx, cy, r * scale, 0, Math.PI * 2);
+                radarCtx.stroke();
+              });
+
+              radarCtx.strokeStyle = '#334155';
+              radarCtx.beginPath();
+              radarCtx.moveTo(cx - 110, cy); radarCtx.lineTo(cx + 110, cy);
+              radarCtx.moveTo(cx, cy - 110); radarCtx.lineTo(cx, cy + 110);
+              radarCtx.stroke();
+
+              const ents = data.entities || [];
+              if (radarSummary) {
+                const players = ents.filter(function(e) { return e.type === 'player'; }).length;
+                const hostiles = ents.filter(function(e) { return e.type === 'hostile'; }).length;
+                radarSummary.innerText = ents.length + ' entities (' + players + ' players, ' + hostiles + ' hostiles)';
+              }
+
+              ents.forEach(function(e) {
+                const ex = cx + (e.dx * scale);
+                const ey = cy + (e.dz * scale);
+                if (Math.hypot(ex - cx, ey - cy) > 115) return;
+
+                radarCtx.beginPath();
+                if (e.type === 'player') {
+                  radarCtx.fillStyle = '#38bdf8';
+                  radarCtx.arc(ex, ey, 4.5, 0, Math.PI * 2);
+                  radarCtx.fill();
+                  radarCtx.font = '9px sans-serif';
+                  radarCtx.fillStyle = '#bae6fd';
+                  radarCtx.textAlign = 'center';
+                  radarCtx.fillText(e.name.slice(0, 8), ex, ey - 6);
+                } else if (e.type === 'hostile') {
+                  radarCtx.fillStyle = '#ef4444';
+                  radarCtx.arc(ex, ey, 3.5, 0, Math.PI * 2);
+                  radarCtx.fill();
+                } else if (e.type === 'passive') {
+                  radarCtx.fillStyle = '#22c55e';
+                  radarCtx.arc(ex, ey, 3, 0, Math.PI * 2);
+                  radarCtx.fill();
+                } else if (e.type === 'item') {
+                  radarCtx.fillStyle = '#fbbf24';
+                  radarCtx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+                  radarCtx.fill();
+                }
+              });
+
+              radarCtx.beginPath();
+              radarCtx.fillStyle = '#2dd4bf';
+              radarCtx.arc(cx, cy, 5, 0, Math.PI * 2);
+              radarCtx.fill();
+
+              const yaw = data.yaw || 0;
+              const nx = cx - Math.sin(yaw) * 14;
+              const ny = cy + Math.cos(yaw) * 14;
+              radarCtx.strokeStyle = '#5eead4';
+              radarCtx.lineWidth = 2.5;
+              radarCtx.beginPath();
+              radarCtx.moveTo(cx, cy);
+              radarCtx.lineTo(nx, ny);
+              radarCtx.stroke();
+
+            } catch (err) {
+              if (radarSummary) radarSummary.innerText = 'Radar offline';
+            }
+          }
+
+          setInterval(updateRadar, 2000);
+          updateRadar();
         </script>
       </body>
     </html>
@@ -640,6 +852,147 @@ app.get('/health', (req, res) => {
     reconnectAttempts: botState.reconnectAttempts,
     memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024
   });
+});
+
+app.get('/api/radar', (req, res) => {
+  if (!bot || !botState.connected || !bot.entity) {
+    return res.json({
+      connected: false,
+      coords: null,
+      yaw: 0,
+      pitch: 0,
+      health: 0,
+      food: 0,
+      oxygen: 20,
+      dimension: 'overworld',
+      heldItem: null,
+      hotbar: [],
+      armor: { head: null, torso: null, legs: null, feet: null },
+      entities: []
+    });
+  }
+
+  const HOSTILE_SET = new Set([
+    'zombie', 'skeleton', 'creeper', 'spider', 'cave_spider', 'enderman',
+    'witch', 'slime', 'magma_cube', 'drowned', 'husk', 'stray', 'phantom',
+    'pillager', 'vindicator', 'evoker', 'ravager', 'vex', 'warden', 'piglin_brute',
+    'blaze', 'ghast', 'wither_skeleton', 'wither', 'ender_dragon', 'silverfish'
+  ]);
+
+  const botPos = bot.entity.position;
+  const entities = [];
+  const MAX_RADAR_DIST = 32;
+
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!entity || entity === bot.entity || !entity.position) continue;
+    const dx = entity.position.x - botPos.x;
+    const dy = entity.position.y - botPos.y;
+    const dz = entity.position.z - botPos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > MAX_RADAR_DIST) continue;
+
+    let category = 'other';
+    const name = String(entity.name || entity.username || '').toLowerCase();
+    if (entity.type === 'player' || entity.username) {
+      category = 'player';
+    } else if (HOSTILE_SET.has(name) || entity.type === 'hostile' || entity.type === 'mob') {
+      category = HOSTILE_SET.has(name) ? 'hostile' : 'passive';
+    } else if (entity.type === 'animal') {
+      category = 'passive';
+    } else if (entity.name === 'item' || entity.type === 'item' || entity.type === 'object') {
+      category = 'item';
+    }
+
+    entities.push({
+      id: entity.id,
+      name: entity.username || entity.name || 'unknown',
+      type: category,
+      dx: Math.round(dx * 10) / 10,
+      dy: Math.round(dy * 10) / 10,
+      dz: Math.round(dz * 10) / 10,
+      distance: Math.round(dist * 10) / 10
+    });
+  }
+
+  const hotbar = [];
+  const quickBarSlot = bot.quickBarSlot || 0;
+  for (let i = 0; i < 9; i++) {
+    const item = bot.inventory?.slots ? bot.inventory.slots[36 + i] : null;
+    hotbar.push({
+      slot: i,
+      selected: i === quickBarSlot,
+      name: item?.name || null,
+      displayName: item?.displayName || (item?.name ? item.name.replace(/_/g, ' ') : 'Empty'),
+      count: item?.count || 0
+    });
+  }
+
+  const getSlotItem = (s) => {
+    const it = bot.inventory?.slots ? bot.inventory.slots[s] : null;
+    return it ? { name: it.name, count: it.count } : null;
+  };
+
+  res.json({
+    connected: true,
+    coords: {
+      x: Math.round(botPos.x * 10) / 10,
+      y: Math.round(botPos.y * 10) / 10,
+      z: Math.round(botPos.z * 10) / 10
+    },
+    yaw: bot.entity.yaw || 0,
+    pitch: bot.entity.pitch || 0,
+    health: bot.health != null ? bot.health : 20,
+    food: bot.food != null ? bot.food : 20,
+    oxygen: bot.oxygenLevel != null ? bot.oxygenLevel : 20,
+    dimension: bot.game?.dimension || 'overworld',
+    heldItem: bot.heldItem ? { name: bot.heldItem.name, count: bot.heldItem.count } : null,
+    hotbar,
+    armor: {
+      head: getSlotItem(5),
+      torso: getSlotItem(6),
+      legs: getSlotItem(7),
+      feet: getSlotItem(8)
+    },
+    entities
+  });
+});
+
+app.post('/api/discord/chat', (req, res) => {
+  const secretProvided = req.headers['x-discord-token'] || req.body?.token;
+  const configuredSecret = process.env.DISCORD_RELAY_TOKEN || config.discord?.relaySecret;
+
+  if (configuredSecret && secretProvided !== configuredSecret) {
+    if (!hasDashboardAccess(req)) {
+      return res.status(401).json({ error: 'Unauthorized: invalid Discord relay token.' });
+    }
+  }
+
+  const username = String(req.body?.username || 'DiscordUser').trim().slice(0, 32);
+  const message = String(req.body?.message || '').trim().slice(0, 256);
+
+  if (!message) {
+    return res.status(400).json({ error: 'Message cannot be empty.' });
+  }
+
+  if (!bot || !botState.connected) {
+    return res.status(503).json({ error: 'Bot is currently not connected to the Minecraft server.' });
+  }
+
+  try {
+    bot.chat('[Discord] <' + username + '> ' + message);
+
+    if (/^[!/]ai\b/i.test(message)) {
+      const commandText = message.replace(/^[!/]ai\s*/i, '').trim();
+      const aiAllowedUsers = getAIChatAllowedUsers(config.ai);
+      if (config.ai?.enabled && isAIChatAuthorized(username, aiAllowedUsers)) {
+        aiAgent.start(commandText, username);
+      }
+    }
+
+    res.json({ success: true, message: 'Message relayed to in-game chat.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get('/api/agent/status', (req, res) => {
@@ -1566,7 +1919,7 @@ function chatModule(bot) {
         }
         try {
           if (aiCommand.type === 'help') {
-            sendAIChatMessage('Use !ai <task>, !ai recognize, !ai research <topic>, !ai knowledge [query], !ai train, !ai train status, !ai stop training, !ai skills <search>, !ai skill <id> [count], !ai think <goal>, !ai solve <goal>, !ai brain, !ai why, !ai teach <rule>, !ai memory, !ai forget <text>, !ai status, !ai pause, !ai resume, !ai plugins, or !ai stop.');
+            sendAIChatMessage('Use !ai <task>, !ai recognize, !ai research <topic>, !ai knowledge [query], !ai train, !ai train status, !ai stop training, !ai skills <search>, !ai skill <id> [count], !ai think <goal>, !ai solve <goal>, !ai brain, !ai why, !ai teach <rule>, !ai memory, !ai forget <text>, !ai status, !ai pause, !ai resume, !ai plugins, !ai vision, or !ai stop.');
           } else if (aiCommand.type === 'status') {
             const status = aiAgent.getStatus();
             const grinding = aiAgent.autonomyActive ? 'Autonomous gathering is enabled.' : 'Autonomous gathering is paused.';
@@ -1603,6 +1956,19 @@ function chatModule(bot) {
               } else {
                 sendAIChatMessage(`Plugins (${list.length}): ${list.map(p => p.name + (p.commands.length ? ' [!' + p.commands.join(', !') + ']' : '')).join(', ')}. Say !ai plugins reload to rescan.`);
               }
+            }
+          } else if (aiCommand.type === 'vision') {
+            const sub = (aiCommand.text || '').toLowerCase();
+            if (sub === 'on') {
+              if (!visionController) visionController = createVisionController();
+              if (visionController) { visionController.start(); sendAIChatMessage('Vision control on.'); }
+              else sendAIChatMessage('Could not start vision control.');
+            } else if (sub === 'off') {
+              if (visionController) { visionController.stop(); sendAIChatMessage('Vision control off.'); }
+              else sendAIChatMessage('Vision control was not running.');
+            } else {
+              const st = visionController ? visionController.status() : { enabled: false };
+              sendAIChatMessage(`Vision control ${st.enabled ? 'ON' : 'off'} (model ${st.model || '?'}, ticks ${st.ticks || 0}, last ${st.lastAction || 'none'}). Say !ai vision on/off.`);
             }
           } else {
             const isQuestion = /\?$/.test(aiCommand.text) ||
@@ -1643,6 +2009,7 @@ function chatModule(bot) {
       }
       if (shouldHandle) {
         const now = Date.now();
+        const chatLang = detectLanguage(cleanedMessage);
         const last = lastAutoResponseAt.get(username.toLowerCase()) || 0;
         if (now - last < 2000) {
           sendAIChatMessage(`${username}: Give me a moment between requests.`);
@@ -1651,7 +2018,7 @@ function chatModule(bot) {
         lastAutoResponseAt.set(username.toLowerCase(), now);
         const isControlRequest = /^(?:please\s+)?(?:stop|halt|cancel|abort|enough|pause|resume|continue|keep going)\b/i.test(plainMessage);
         if (['working', 'paused'].includes(aiAgent.getStatus().status) && !isControlRequest) {
-          sendAIChatMessage(`${username}: I'm still working on the current task. Say stop if you want me to switch.`);
+          sendAIChatMessage(`${username}: ${localizedReply('stillWorking', chatLang)}`);
           return;
         }
         try {
@@ -1659,7 +2026,7 @@ function chatModule(bot) {
             /^(?:who|what|how|why|when|where|which|can|could|would|will|is|are|does|do|did|tell|joke|calc|calculate|recipe|status|help)\b/i.test(cleanedMessage);
           aiAgent.start(cleanedMessage, username);
           if (!isQuestion) {
-            sendAIChatMessage(`${username}: Understood. I'll act on that now.`);
+            sendAIChatMessage(`${username}: ${localizedReply('working', chatLang)}`);
           }
         } catch (error) {
           sendAIChatMessage(`${username}: ${error.message}`);

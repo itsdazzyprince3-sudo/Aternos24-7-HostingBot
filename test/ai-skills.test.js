@@ -300,3 +300,45 @@ test('skills execute drop, look, hotbar slot, swing, and use actions', async () 
   assert.match(lookRes.message, /Looking straight up/);
   assert.equal(log[4][0], 'look');
 });
+
+test('sortChests deposits surplus materials while preserving tools and primary food', async () => {
+  const deposited = [];
+  const fakeChestWindow = {
+    deposit: async (type, meta, count) => {
+      deposited.push({ type, count });
+    },
+    close: () => {}
+  };
+
+  const chestPos = new Vec3(2, 64, 0);
+  const fakeBot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0) },
+    inventory: {
+      items: () => [
+        { slot: 36, name: 'diamond_sword', type: 101, count: 1 },
+        { slot: 37, name: 'cooked_beef', type: 102, count: 32 },
+        { slot: 38, name: 'iron_ingot', type: 103, count: 15 },
+        { slot: 39, name: 'cobblestone', type: 104, count: 64 },
+        { slot: 40, name: 'bread', type: 105, count: 10 }
+      ]
+    },
+    findBlock: ({ matching }) => {
+      if (matching({ name: 'chest' })) {
+        return { name: 'chest', position: chestPos };
+      }
+      return null;
+    },
+    pathfinder: {
+      goto: async () => {},
+      setGoal: () => {}
+    },
+    openChest: async () => fakeChestWindow
+  };
+
+  const skills = makeSkills(fakeBot);
+  const result = await skills.sortChests('ores');
+  assert.equal(result.totalDeposited, 15);
+  assert.deepEqual(deposited, [{ type: 103, count: 15 }]);
+  assert.match(result.message, /15 iron ingot/);
+});
