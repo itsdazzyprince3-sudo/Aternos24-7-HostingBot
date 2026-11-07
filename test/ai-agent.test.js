@@ -1345,3 +1345,51 @@ test('local recognition command reports recognized resources and threats', async
   assert.match(agent.getStatus().message, /iron_ore/);
   assert.match(agent.getStatus().message, /zombie/);
 });
+
+test('local neural model commands report status, evaluate observations, and train', async () => {
+  const agent = new AIAgent({
+    config: {
+      enabled: true,
+      training: { knowledgePath: `${require('node:os').tmpdir()}/virgo-model-knowledge-${process.pid}.json` }
+    },
+    getBot: () => ({}),
+    isConnected: () => true,
+    memory: noOpMemory
+  });
+  agent.createSkills = () => ({
+    observation: () => ({
+      health: 20,
+      food: 20,
+      inventory: { oak_log: 8 },
+      nearbyBlocks: [],
+      nearbyHostiles: [],
+      nearbyEntities: [],
+      players: {},
+      time: { isDay: true }
+    })
+  });
+
+  // 1. Model status
+  agent.start('model status');
+  for (let attempt = 0; attempt < 40 && agent.getStatus().status === 'working'; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(agent.getStatus().status, 'completed');
+  assert.match(agent.getStatus().message, /Neural Model Status/);
+
+  // 2. Model evaluation
+  agent.start('model eval');
+  for (let attempt = 0; attempt < 40 && agent.getStatus().status === 'working'; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(agent.getStatus().status, 'completed');
+  assert.match(agent.getStatus().message, /Neural Policy Evaluation/);
+
+  // 3. Model training
+  agent.start('model train 2');
+  for (let attempt = 0; attempt < 40 && agent.getStatus().status === 'working'; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(agent.getStatus().status, 'completed');
+  assert.match(agent.getStatus().message, /Trained full stack AI model for 2 epochs/);
+});

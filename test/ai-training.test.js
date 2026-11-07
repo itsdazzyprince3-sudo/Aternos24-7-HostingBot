@@ -96,6 +96,28 @@ test('training can start, report status, and stop persistently', () => {
   }
 });
 
+test('a timed training run sets a deadline, reports hours, and expires cleanly', () => {
+  const { directory, file } = temporaryKnowledge();
+  try {
+    const knowledge = new AIKnowledge(file);
+    const trainer = new AITrainer({ knowledge, fetchImpl: fakeWikiFetch(), config: { training: { intervalMs: 60000 } } });
+    trainer.start({ iterations: Infinity, durationMs: 36000000 });
+    assert.equal(trainer.status().running, true);
+    assert.match(trainer.statusText(), /hours remain/);
+    const until = Number(knowledge.getTraining().trainingUntil);
+    assert.ok(Number.isFinite(until) && until > Date.now());
+    trainer.stop();
+    assert.equal(trainer.status().running, false);
+
+    knowledge.setTraining({ trainingUntil: Date.now() - 1000, userStopped: false, trainingFinished: false });
+    trainer.autoStart();
+    assert.equal(trainer.status().running, false);
+    assert.equal(knowledge.getTraining().trainingFinished, true);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('a failed research cycle returns null and records the error without throwing', async () => {
   const { directory, file } = temporaryKnowledge();
   try {

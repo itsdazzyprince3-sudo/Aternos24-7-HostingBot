@@ -1414,8 +1414,12 @@ function chatModule(bot) {
               sendAIChatMessage(`Recovery paused: ${error.message}`);
             });
           } else {
+            const isQuestion = /\?$/.test(aiCommand.text) ||
+              /^(?:who|what|how|why|when|where|which|can|could|would|will|is|are|does|do|did|tell|joke|calc|calculate|recipe|status|help)\b/i.test(aiCommand.text);
             aiAgent.start(aiCommand.text, username);
-            sendAIChatMessage(`${username}: Got it. I'm working on that now; use !ai status to check progress.`);
+            if (!isQuestion) {
+              sendAIChatMessage(`${username}: Got it. I'm working on that now; use !ai status to check progress.`);
+            }
           }
         } catch (error) {
           sendAIChatMessage(error.message);
@@ -1428,10 +1432,12 @@ function chatModule(bot) {
       }
 
       const plainMessage = String(message || '').trim();
-      if (shouldAutoRespondToChat(username, config.ai) && plainMessage && !/^[!/]/.test(plainMessage)) {
+      const botName = bot.username || 'virgo';
+      const mentionsBot = new RegExp(`\\b${botName}\\b|^bot\\b|^hey bot\\b`, 'i').test(plainMessage);
+      if ((shouldAutoRespondToChat(username, config.ai) || (config.ai?.enabled && mentionsBot)) && plainMessage && !/^[!/]/.test(plainMessage)) {
         const now = Date.now();
         const last = lastAutoResponseAt.get(username.toLowerCase()) || 0;
-        if (now - last < 3000) {
+        if (now - last < 2000) {
           sendAIChatMessage(`${username}: Give me a moment between requests.`);
           return;
         }
@@ -1442,8 +1448,13 @@ function chatModule(bot) {
           return;
         }
         try {
-          aiAgent.start(plainMessage, username);
-          sendAIChatMessage(`${username}: Understood. I'll answer or act on that now.`);
+          const cleanedMessage = plainMessage.replace(new RegExp(`^(?:hey\\s+)?${botName}[,:]?\\s*`, 'i'), '').trim() || plainMessage;
+          const isQuestion = /\?$/.test(cleanedMessage) ||
+            /^(?:who|what|how|why|when|where|which|can|could|would|will|is|are|does|do|did|tell|joke|calc|calculate|recipe|status|help)\b/i.test(cleanedMessage);
+          aiAgent.start(cleanedMessage, username);
+          if (!isQuestion) {
+            sendAIChatMessage(`${username}: Understood. I'll act on that now.`);
+          }
         } catch (error) {
           sendAIChatMessage(`${username}: ${error.message}`);
         }

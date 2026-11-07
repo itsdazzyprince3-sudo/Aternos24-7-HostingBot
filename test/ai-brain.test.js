@@ -201,3 +201,40 @@ test('recognition, research, knowledge, and training phrases route locally', () 
   assert.equal(parseLocalIntent('train on creeper').type, 'research');
   assert.equal(parseLocalIntent('train on creeper').topic, 'creeper');
 });
+
+test('conversational AI engine answers identity, math, jokes, and lore', () => {
+  const observation = { health: 20, food: 20, position: { x: 10, y: 64, z: 20 } };
+
+  // Identity & capabilities
+  assert.match(answerKnownQuestion('who are you', observation), /Virgo/i);
+  assert.match(answerKnownQuestion('who made you', observation), /Lamgerr/i);
+  assert.match(answerKnownQuestion('what can you do', observation), /mine/i);
+  assert.match(answerKnownQuestion('are you an ai', observation), /AI/i);
+
+  // Math & stacks
+  assert.match(answerKnownQuestion('how many is 4 stacks', observation), /256 items/i);
+  assert.match(answerKnownQuestion('what is 64 * 3', observation), /192/);
+
+  // Jokes
+  assert.ok(answerKnownQuestion('tell me a joke', observation).length > 10);
+
+  // Advanced lore
+  assert.match(answerKnownQuestion('what is the warden', observation), /Deep Dark/i);
+  assert.match(answerKnownQuestion('how do i beat the wither', observation), /Nether Star/i);
+  assert.match(answerKnownQuestion('how do i get an elytra', observation), /End Ship/i);
+  assert.match(answerKnownQuestion('what does mending do', observation), /XP orbs/i);
+});
+
+test('chat authorization and natural command parsing support all players', () => {
+  const { isAIChatAuthorized, parseAIChatCommand } = require('../lib/ai-chat');
+
+  // Wildcard allowlist authorizes all players, configured list authorizes matched
+  assert.equal(isAIChatAuthorized('Player123', ['*']), true);
+  assert.equal(isAIChatAuthorized('Virgo', ['virgo']), true);
+
+  // Natural chat prefixes
+  assert.equal(parseAIChatCommand('!ai what is a creeper').text, 'what is a creeper');
+  assert.equal(parseAIChatCommand('virgo come to me').text, 'come to me');
+  assert.equal(parseAIChatCommand('hey virgo, mine 10 stone').text, 'mine 10 stone');
+  assert.equal(parseAIChatCommand('bot: tell me a joke').text, 'tell me a joke');
+});
