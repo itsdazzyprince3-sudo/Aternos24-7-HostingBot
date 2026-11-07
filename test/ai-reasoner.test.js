@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getReasoner, requiredPickaxeTier } = require('../lib/ai-reasoner');
+const { getReasoner, requiredPickaxeTier, compileSensorySnapshot } = require('../lib/ai-reasoner');
 const { getSkillCatalog } = require('../lib/skill-catalog');
 
 function reasoner() {
@@ -36,4 +36,60 @@ test('reasoner handles night survival and single skill goals', () => {
   const single = planner.plan('hunt zombies');
   assert.ok(single);
   assert.equal(single.skill.id, 'hunt:zombie');
+});
+
+test('reasoner compiles full A-Z thinking stages and Chain-of-Thought trace', () => {
+  const planner = reasoner();
+  const observation = {
+    health: 20,
+    food: 20,
+    inventory: { oak_log: 8 },
+    nearbyHostiles: [],
+    time: { isDay: true, timeOfDay: 6000 }
+  };
+  const plan = planner.plan('iron pickaxe', { observation });
+  assert.ok(plan);
+  assert.ok(Array.isArray(plan.thought));
+  assert.ok(plan.thought.some(t => t.includes('[Stage A: Perception]')));
+  assert.ok(plan.thought.some(t => t.includes('[Stage B: Goal Formulation]')));
+  assert.ok(plan.thought.some(t => t.includes('[Stage C: Prerequisite Tree]')));
+  assert.ok(plan.thought.some(t => t.includes('[Stage D: Tool Verification]')));
+  assert.ok(plan.thought.some(t => t.includes('[Stage F: Schedule Compilation]')));
+  assert.ok(plan.thought.some(t => t.includes('[Stage G: Dispatch Readiness]')));
+  assert.ok(plan.azTrace);
+  assert.equal(plan.azTrace.stageG.status, 'ready');
+  assert.ok(plan.confidence > 0 && plan.confidence <= 1);
+});
+
+test('reasoner injects tactical survival precondition when health is critical', () => {
+  const planner = reasoner();
+  const observation = {
+    health: 6,
+    food: 12,
+    inventory: {},
+    nearbyHostiles: [{ name: 'creeper', distance: 8 }],
+    time: { isDay: false }
+  };
+  const plan = planner.plan('mine 8 stone', { observation });
+  assert.ok(plan);
+  assert.equal(plan.steps[0].skill, 'survive');
+  assert.ok(plan.thought.some(t => t.includes('HIGH RISK') || t.includes('Survival precondition')));
+});
+
+test('compileSensorySnapshot summarizes multi-modal world context', () => {
+  const observation = {
+    health: 18,
+    food: 16,
+    time: { isDay: true, timeOfDay: 3000 },
+    nearbyHostiles: [{ name: 'skeleton', distance: 14 }],
+    armor: { chestplate: 'iron_chestplate' },
+    inventory: { stone_pickaxe: 1, torch: 16 }
+  };
+  const snapshot = compileSensorySnapshot(observation);
+  assert.equal(snapshot.health, 18);
+  assert.equal(snapshot.food, 16);
+  assert.equal(snapshot.armorPieces, 1);
+  assert.equal(snapshot.pickTier, 2);
+  assert.equal(snapshot.threat.name, 'skeleton');
+  assert.match(snapshot.summary, /Health 18\/20/);
 });
