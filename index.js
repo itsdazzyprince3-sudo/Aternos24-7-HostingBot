@@ -1239,9 +1239,13 @@ function createBot() {
     bot = null;
   }
 
-  console.log(`[Bot] Connecting to ${config.server.ip}:${config.server.port}`);
-
   try {
+    const resolvedPort = (config.server.port && Number(config.server.port) !== 25565)
+      ? Number(config.server.port)
+      : undefined;
+
+    console.log(`[Bot] Connecting to ${config.server.ip}${resolvedPort ? `:${resolvedPort}` : ' (auto-resolving SRV port)'}`);
+
     const versionResolution = resolveBotVersion(config);
     const botVersion = versionResolution.version;
     if (versionResolution.fallback) {
@@ -1260,7 +1264,7 @@ function createBot() {
       password: botPassword,
       auth: config['bot-account'].type,
       host: config.server.ip,
-      port: config.server.port,
+      port: resolvedPort,
       version: botVersion,
       hideErrors: true,
       respawn: true,
@@ -1551,11 +1555,20 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
     });
 
     setTimeout(() => {
-      if (!authHandled && bot && botState.connected) {
+      if (authHandled || !bot || !botState.connected) return;
+      if (config.utils['auto-auth']?.register) {
+        console.log('[Auth] No prompt after 10s, sending /register then /login as failsafe');
+        bot.chat(`/register ${authPassword} ${authPassword}`);
+        setTimeout(() => {
+          if (!bot || !botState.connected) return;
+          bot.chat(`/login ${authPassword}`);
+          console.log('[Auth] Sent /login fallback');
+        }, 2500);
+      } else {
         console.log('[Auth] No prompt after 10s, sending /login as failsafe');
         bot.chat(`/login ${authPassword}`);
-        authHandled = true;
       }
+      authHandled = true;
     }, 10000);
   }
 
