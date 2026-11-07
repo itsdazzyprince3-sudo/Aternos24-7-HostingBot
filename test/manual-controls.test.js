@@ -129,4 +129,5 @@ test('index.js passes full JavaScript syntax compilation without errors', () => 
   assert.ok(code.includes('offline-warning-card'));
   assert.ok(code.includes('Minecraft Server is Offline!'));
   assert.ok(code.includes('econnrefused'));
+  assert.ok(code.includes('econnreset'));
 });
