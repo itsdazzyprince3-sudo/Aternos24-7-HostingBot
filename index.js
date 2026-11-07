@@ -1561,7 +1561,7 @@ function initializeModules(bot, mcData, defaultMove, authPassword) {
 
   if (config.ai?.enabled) {
     bot.pathfinder.setMovements(defaultMove);
-    addInterval(() => aiAgent.checkSurvival(), 1000);
+    addInterval(() => aiAgent.checkSurvival(), Number(config.ai?.survivalIntervalMs) || 4000);
     if (config.ai.autonomous?.enabled) {
       try {
         aiAgent.startAutonomous();

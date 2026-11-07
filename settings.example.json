@@ -87,6 +87,9 @@
       "intervalMs": 6000,
       "chatProgress": true
     },
+    "survivalIntervalMs": 4000,
+    "scanDistance": 12,
+    "scanCount": 48,
     "model": "gemini-3.5-flash-lite",
     "openai": {
       "model": "gpt-5.5",
