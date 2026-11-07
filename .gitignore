@@ -7,3 +7,5 @@ launcher_accounts.json
 /data/ai-memory.json
 /data/ai-knowledge.json
 ai-knowledge.json
+cpp/bot_view
+cpp/*.o

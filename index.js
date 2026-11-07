@@ -18,6 +18,7 @@ const { isPatrolEnabled, runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
 const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
 const pluginLoader = require('./lib/plugin-loader');
+const { FrameServer } = require('./lib/frame-server');
 const settingsPath = require('node:path').join(__dirname, 'settings.json');
 if (!fs.existsSync(settingsPath)) {
   throw new Error('Missing settings.json. Copy settings.example.json to settings.json and configure your server before starting the bot.');
@@ -91,6 +92,21 @@ const aiAgent = new AIAgent({
 });
 
 pluginLoader.init({ config, aiAgent });
+
+// First-person C++ viewer bridge (opt-in). Start the bot with BOT_VIEW=1 and run
+// ./cpp/bot_view, then open http://127.0.0.1:8080/ to see the bot's first-person view.
+const viewFrameServer = (process.env.BOT_VIEW === '1' || config.view?.enabled === true)
+  ? new FrameServer({
+      getBot: () => bot,
+      isConnected: () => botState.connected,
+      port: Number(process.env.VIEW_FRAME_PORT) || config.view?.port || 31337,
+      w: Number(process.env.VIEW_W) || config.view?.w || 64,
+      h: Number(process.env.VIEW_H) || config.view?.h || 48,
+      d: Number(process.env.VIEW_D) || config.view?.d || 64,
+      fps: Number(process.env.VIEW_FPS) || config.view?.fps || 6
+    })
+  : null;
+if (viewFrameServer) viewFrameServer.start();
 
 function hasDashboardAccess(req) {
   const expected = process.env.DASHBOARD_TOKEN;
