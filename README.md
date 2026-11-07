@@ -54,7 +54,19 @@ find an id, `!ai skill <id> [count]` to run one directly (for example
 `!ai solve <goal>` to plan and execute it. Natural instructions such as
 `!ai make me a full iron armor set`, `!ai survive the night`, or
 `!ai get me some diamonds` are decomposed into skill steps, including any
-pickaxe tier needed before mining.
+pickaxe tier needed before mining. `!ai tunnel 16` digs a lit, hazard-aware
+tunnel, `!ai fish` works a nearby water block, `!ai withdraw <item> [count]`
+pulls stock from a chest, and `!ai farm` harvests and replants multiple crops.
+
+The local brain adds a deliberation layer on top of the catalog. Before acting it
+reads health, food, hostiles, time, tools, armor, and recent skill outcomes, then
+weighs the urgent need against the request. It narrates its reasoning with
+`!ai think`, reports its world model and learned reliability with `!ai brain`,
+and explains the last choice with `!ai why`. Failed plans are diagnosed (blocked
+route, missing prerequisite, absent target, low health) and retried with a
+different tactic instead of repeating the same attempt. During autonomous
+grinding it also spends calm windows on upgrades such as a better pickaxe,
+torches, iron reserves, armor, or farm upkeep.
 
 
 With `ai.respondToTrustedChat` enabled, plain messages from names in

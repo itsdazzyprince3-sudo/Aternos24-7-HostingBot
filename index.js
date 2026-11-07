@@ -1388,7 +1388,7 @@ function chatModule(bot) {
         }
         try {
           if (aiCommand.type === 'help') {
-            sendAIChatMessage('Use !ai <task>, !ai skills <search>, !ai skill <id> [count], !ai think <goal>, !ai solve <goal>, !ai teach <rule>, !ai memory, !ai forget <text>, !ai forget all, !ai status, !ai pause, !ai resume, or !ai stop.');
+            sendAIChatMessage('Use !ai <task>, !ai skills <search>, !ai skill <id> [count], !ai think <goal>, !ai solve <goal>, !ai brain, !ai why, !ai teach <rule>, !ai memory, !ai forget <text>, !ai forget all, !ai status, !ai pause, !ai resume, or !ai stop.');
           } else if (aiCommand.type === 'status') {
             const status = aiAgent.getStatus();
             const grinding = aiAgent.autonomyActive ? 'Autonomous gathering is enabled.' : 'Autonomous gathering is paused.';

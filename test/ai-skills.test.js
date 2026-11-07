@@ -179,3 +179,48 @@ test('mining falls back to registry blocks outside the hand-written whitelist', 
   });
   assert.deepEqual(skills.blockNamesForItem('ancient_debris'), ['ancient_debris']);
 });
+
+test('tunnel direction avoids lava and picks the safer axis', () => {
+  const origin = new Vec3(0, 64, 0).floored();
+  const blocks = new Map();
+  const set = (x, y, z, name) => blocks.set(`${x},${y},${z}`, { name, diggable: true, boundingBox: 'block' });
+  for (let step = 1; step <= 4; step += 1) {
+    set(0, 64, -step, 'lava');
+    set(0, 65, -step, 'lava');
+    set(step, 64, 0, 'stone');
+    set(step, 65, 0, 'stone');
+  }
+  const bot = {
+    username: 'commotozze',
+    entity: { position: origin },
+    inventory: { items: () => [] },
+    entities: {},
+    blockAt: position => blocks.get(`${Math.floor(position.x)},${Math.floor(position.y)},${Math.floor(position.z)}`) || { name: 'air', diggable: true, boundingBox: 'empty' }
+  };
+  const skills = makeSkills(bot);
+  assert.notEqual(skills.pickTunnelDirection(bot), 'north');
+  assert.equal(skills.pickTunnelDirection(bot), 'east');
+});
+
+test('withdraw pulls the requested amount from a nearby chest', async () => {
+  const withdrawn = [];
+  const bot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0) },
+    inventory: { items: () => [] },
+    entities: {},
+    registry: { itemsByName: { iron_ingot: { id: 1, name: 'iron_ingot' } } },
+    findBlock: () => ({ name: 'chest', position: new Vec3(1, 64, 0) }),
+    openChest: async () => ({
+      containerItems: () => [
+        { name: 'iron_ingot', type: 1, count: 5 },
+        { name: 'iron_ingot', type: 1, count: 7 }
+      ],
+      withdraw: async (type, meta, count) => withdrawn.push(count),
+      close: () => {}
+    })
+  };
+  const result = await makeSkills(bot).withdrawItem('iron_ingot', 9);
+  assert.match(result.message, /Withdrew 9 iron ingot/);
+  assert.deepEqual(withdrawn, [5, 4]);
+});

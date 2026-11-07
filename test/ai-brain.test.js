@@ -142,3 +142,27 @@ test('goal phrases route to hunting, breeding, and reasoned set planning', () =>
   assert.equal(parseLocalIntent('skill mine:diamond_ore 4').type, 'skill');
   assert.equal(parseLocalIntent('skills pickaxe').type, 'skills');
 });
+
+test('brain inspection and reasoning phrases route locally', () => {
+  assert.equal(parseLocalIntent('brain').type, 'brain');
+  assert.equal(parseLocalIntent('what are you thinking').type, 'brain');
+  assert.equal(parseLocalIntent('why').type, 'why');
+  assert.equal(parseLocalIntent('why did you do that').type, 'why');
+  assert.equal(parseLocalIntent('explain your reasoning').type, 'why');
+});
+
+test('new physical skills parse from natural phrases', () => {
+  assert.equal(parseLocalIntent('tunnel 16').type, 'stripMine');
+  assert.equal(parseLocalIntent('tunnel 16').length, 16);
+  assert.equal(parseLocalIntent('strip mine 8').type, 'stripMine');
+  assert.equal(parseLocalIntent('fish').type, 'fish');
+  assert.equal(parseLocalIntent('go fishing').type, 'fish');
+  assert.deepEqual(
+    (({ item, count }) => ({ item, count }))(parseLocalIntent('withdraw 8 iron_ingot')),
+    { item: 'iron_ingot', count: 8 }
+  );
+  assert.deepEqual(
+    (({ item, count }) => ({ item, count }))(parseLocalIntent('take 4 diamond from chest')),
+    { item: 'diamond', count: 4 }
+  );
+});
