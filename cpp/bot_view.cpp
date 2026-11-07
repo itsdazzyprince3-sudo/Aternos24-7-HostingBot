@@ -260,6 +260,7 @@ static void renderer(){
     { std::lock_guard<std::mutex> lk(g_mtx); f = g_frame; }
     if(MOCK && f.ts==0) f = mockFrame();
     if(f.ts!=0 || MOCK){
+      if(MOCK && f.ts==0){ std::lock_guard<std::mutex> lk(g_mtx); g_frame = f; }
       renderFrame(f, fb, W, H);
       { std::lock_guard<std::mutex> lk(g_fb_mtx); g_fb = fb; }
       frames++;
