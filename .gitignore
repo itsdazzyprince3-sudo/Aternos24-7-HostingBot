@@ -9,3 +9,6 @@ launcher_accounts.json
 ai-knowledge.json
 cpp/bot_view
 cpp/*.o
+
+# runtime-trained weights churn every run; do not track
+data/ai-model-weights.json

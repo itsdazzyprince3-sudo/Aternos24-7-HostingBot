@@ -11,9 +11,9 @@ const {
   createTrustedChatMemoryNote,
   getAIChatAllowedUsers,
   isAIChatAuthorized,
-  parseAIChatCommand,
-  shouldAutoRespondToChat
+  parseAIChatCommand
 } = require('./lib/ai-chat');
+const { parseLocalIntent } = require('./lib/ai-brain');
 const { isPatrolEnabled, runPatrol } = require('./lib/patrol');
 const { ManualControlSession } = require('./lib/manual-controls');
 const { installProtocolPacketCompatibility } = require('./lib/protocol-packet-compat');
@@ -1629,7 +1629,19 @@ function chatModule(bot) {
       const plainMessage = String(message || '').trim();
       const botName = bot.username || 'virgo';
       const mentionsBot = new RegExp(`\\b${botName}\\b|^bot\\b|^hey bot\\b`, 'i').test(plainMessage);
-      if ((shouldAutoRespondToChat(username, config.ai) || (config.ai?.enabled && mentionsBot)) && plainMessage && !/^[!/]/.test(plainMessage)) {
+      const trustedChatter = config.ai?.enabled && isAIChatAuthorized(username, aiAllowedUsers);
+      let shouldHandle = false;
+      let cleanedMessage = plainMessage;
+      if (trustedChatter && plainMessage && !/^[!/]/.test(plainMessage)) {
+        cleanedMessage = plainMessage.replace(new RegExp(`^(?:hey\\s+)?${botName}[,:]?\\s*`, 'i'), '').trim() || plainMessage;
+        if (mentionsBot) {
+          shouldHandle = true;
+        } else {
+          const parsed = parseLocalIntent(cleanedMessage);
+          shouldHandle = parsed.type !== 'chat' || parsed.intent === 'question';
+        }
+      }
+      if (shouldHandle) {
         const now = Date.now();
         const last = lastAutoResponseAt.get(username.toLowerCase()) || 0;
         if (now - last < 2000) {
@@ -1639,11 +1651,10 @@ function chatModule(bot) {
         lastAutoResponseAt.set(username.toLowerCase(), now);
         const isControlRequest = /^(?:please\s+)?(?:stop|halt|cancel|abort|enough|pause|resume|continue|keep going)\b/i.test(plainMessage);
         if (['working', 'paused'].includes(aiAgent.getStatus().status) && !isControlRequest) {
-          sendAIChatMessage(`${username}: I'm still working on the current task. Use !ai stop if you want me to switch.`);
+          sendAIChatMessage(`${username}: I'm still working on the current task. Say stop if you want me to switch.`);
           return;
         }
         try {
-          const cleanedMessage = plainMessage.replace(new RegExp(`^(?:hey\\s+)?${botName}[,:]?\\s*`, 'i'), '').trim() || plainMessage;
           const isQuestion = /\?$/.test(cleanedMessage) ||
             /^(?:who|what|how|why|when|where|which|can|could|would|will|is|are|does|do|did|tell|joke|calc|calculate|recipe|status|help)\b/i.test(cleanedMessage);
           aiAgent.start(cleanedMessage, username);
@@ -1657,11 +1668,6 @@ function chatModule(bot) {
       }
 
       if (config.chat?.respond) {
-        const lowerMsg = message.toLowerCase();
-        if (/^(?:hello|hi|hey|yo|sup)\b/i.test(lowerMsg)) {
-          bot.chat(`Hello, ${username}!`);
-        }
-
         if (message.startsWith('!tp ')) {
           if (tpWhitelist.includes(username)) {
             const target = message.split(' ')[1];
