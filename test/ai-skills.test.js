@@ -137,3 +137,45 @@ test('wood gathering fails honestly when log blocks break but no log items enter
   assert.equal(skills.countItem('oak_log'), 0);
   assert.equal(progress.some(message => /8 collected/i.test(message)), false);
 });
+
+test('equipment slots map armor, off-hand, and tools correctly', () => {
+  const skills = makeSkills({
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0) },
+    inventory: { items: () => [] },
+    entities: {}
+  });
+  assert.equal(skills.equipmentSlot('iron_helmet'), 'head');
+  assert.equal(skills.equipmentSlot('diamond_chestplate'), 'torso');
+  assert.equal(skills.equipmentSlot('netherite_leggings'), 'legs');
+  assert.equal(skills.equipmentSlot('golden_boots'), 'feet');
+  assert.equal(skills.equipmentSlot('shield'), 'off-hand');
+  assert.equal(skills.equipmentSlot('diamond_pickaxe'), 'hand');
+});
+
+test('hunt and breed guard against unknown targets and missing animals', async () => {
+  const bot = {
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0) },
+    inventory: { items: () => [] },
+    entities: {}
+  };
+  await assert.rejects(makeSkills(bot).huntMob('player'), /do not hunt/);
+  await assert.rejects(makeSkills(bot).huntMob('zombie'), /could not reach or defeat/);
+  await assert.rejects(makeSkills(bot).breedAnimal('zombie'), /do not know how to breed/);
+  await assert.rejects(makeSkills(bot).breedAnimal('cow'), /need two/);
+});
+
+test('mining falls back to registry blocks outside the hand-written whitelist', () => {
+  const skills = makeSkills({
+    username: 'commotozze',
+    entity: { position: new Vec3(0, 64, 0) },
+    inventory: { items: () => [] },
+    entities: {},
+    registry: {
+      blocksByName: { ancient_debris: { name: 'ancient_debris', harvestTools: { 1: 'netherite_pickaxe' }, boundingBox: 'block' } },
+      items: { 1: { name: 'netherite_pickaxe' } }
+    }
+  });
+  assert.deepEqual(skills.blockNamesForItem('ancient_debris'), ['ancient_debris']);
+});

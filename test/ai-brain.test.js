@@ -126,3 +126,19 @@ test('memory inspection and erase phrases map to explicit local commands', () =>
   assert.equal(parseLocalIntent('forget all').type, 'forgetAll');
   assert.equal(parseLocalIntent('clear everything').type, 'forgetAll');
 });
+
+test('goal phrases route to hunting, breeding, and reasoned set planning', () => {
+  assert.deepEqual(
+    (({ type, target, count }) => ({ type, target, count }))(parseLocalIntent('hunt zombies')),
+    { type: 'hunt', target: 'zombie', count: 1 }
+  );
+  assert.equal(parseLocalIntent('kill skeletons').target, 'skeleton');
+  assert.deepEqual(
+    (({ type, target, count }) => ({ type, target, count }))(parseLocalIntent('feed cows')),
+    { type: 'breed', target: 'cow', count: 2 }
+  );
+  assert.equal(parseLocalIntent('make me a full iron armor set').type, 'solve');
+  assert.equal(parseLocalIntent('full diamond tool set').type, 'solve');
+  assert.equal(parseLocalIntent('skill mine:diamond_ore 4').type, 'skill');
+  assert.equal(parseLocalIntent('skills pickaxe').type, 'skills');
+});

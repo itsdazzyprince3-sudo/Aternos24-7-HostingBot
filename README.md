@@ -46,6 +46,16 @@ for commands. Examples: `!ai hello`, `!ai come`, `!ai follow me`, `!ai mine 8
 stone`, `!ai craft wooden_pickaxe`, `!ai grind wood`, `!ai status`, `!ai teach
 keep three logs`, and `!ai stop`.
 
+The bot also builds a skill catalog from the installed Minecraft data: mining,
+crafting, smelting, equipping, hunting, breeding, and delivery entries for every
+block, item, mob, and recipe the version knows. Use `!ai skills <search>` to
+find an id, `!ai skill <id> [count]` to run one directly (for example
+`!ai skill mine:diamond_ore 4`), `!ai think <goal>` to inspect a plan, and
+`!ai solve <goal>` to plan and execute it. Natural instructions such as
+`!ai make me a full iron armor set`, `!ai survive the night`, or
+`!ai get me some diamonds` are decomposed into skill steps, including any
+pickaxe tier needed before mining.
+
 
 With `ai.respondToTrustedChat` enabled, plain messages from names in
 `ai.allowedUsers` are sent to the configured AI provider. Colloquial variants
