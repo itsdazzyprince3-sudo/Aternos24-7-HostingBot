@@ -67,7 +67,7 @@ function sendAIChatMessage(message) {
   const text = String(message).replace(/[\r\n\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200);
   if (!text) return;
   try {
-    bot.chat(`[Virgo] ${text}`);
+    bot.chat(`[${bot.username || 'Virgo'}] ${text}`);
   } catch (error) {
     console.log(`[AI Chat] Could not send response: ${error.message}`);
   }
@@ -1642,7 +1642,7 @@ function chatModule(bot) {
 
       if (config.chat?.respond) {
         const lowerMsg = message.toLowerCase();
-        if (lowerMsg.includes('hello') || lowerMsg.includes('hi')) {
+        if (/^(?:hello|hi|hey|yo|sup)\b/i.test(lowerMsg)) {
           bot.chat(`Hello, ${username}!`);
         }
 
