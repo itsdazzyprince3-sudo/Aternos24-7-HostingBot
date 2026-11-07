@@ -82,10 +82,11 @@ fetches the Minecraft Wiki, extracts verifiable sentences, and stores them in
 the Nether, and the End; `!ai train 5` runs a fixed number of topics, `!ai train
 status` reports progress, and `!ai stop training` stops it. Training persists
 across restarts, queues knowledge gaps from failed tasks, records its own task
-outcomes as experiences, and feeds learned notes back into `!ai knowledge`,
-recognition, and future model prompts. Relevant successful and failed task
-examples help it adapt its next approach. This is retrieval-based learning: it
-does not change or fine-tune the underlying model's weights. Set
+outcomes as distinct, bounded experiences (up to 300 recent episodes), and feeds
+learned notes back into `!ai knowledge`, recognition, and future model prompts.
+Relevant successful and failed task examples help it adapt its next approach.
+This is retrieval-based learning: it does not change or fine-tune the underlying
+model's weights. Set
 `ai.training.enabled` to `false` to disable experience collection and web
 training. `ai.training.autoStart` defaults to `false`, so web research only
 runs after `!ai train` unless you opt in to starting it on launch. Training

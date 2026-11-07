@@ -70,3 +70,29 @@ test('experience records keep failures searchable and queue new gaps', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('repeated task experiences retain both successes and failures across reloads', () => {
+  const { directory, file } = temporaryKnowledge();
+  try {
+    const knowledge = new AIKnowledge(file);
+    knowledge.recordExperience({
+      instruction: 'mine diamond ore',
+      success: false,
+      message: 'No iron_pickaxe in my inventory.',
+      intent: 'mine'
+    });
+    knowledge.recordExperience({
+      instruction: 'mine diamond ore',
+      success: true,
+      message: 'Collected 4 diamonds after crafting an iron pickaxe.',
+      intent: 'mine'
+    });
+
+    const reloaded = new AIKnowledge(file);
+    const experiences = reloaded.search('mine diamond ore', { limit: 5, kind: 'experience' });
+    assert.equal(reloaded.stats().experiences, 2);
+    assert.deepEqual(new Set(experiences.map(entry => entry.title)), new Set(['Task failed', 'Task succeeded']));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
