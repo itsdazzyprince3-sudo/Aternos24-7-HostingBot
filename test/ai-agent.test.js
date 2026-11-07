@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { Vec3 } = require('vec3');
 const { AIAgent, LOW_HEALTH_THRESHOLD, MAX_INSTRUCTION_LENGTH } = require('../lib/ai-agent');
 const { parseGeminiInteraction } = require('../lib/gemini-interactions');
@@ -959,6 +962,47 @@ test('local web search does not run unless enabled in settings', async () => {
   assert.equal(agent.shouldSearchLocal('What is the latest release?'), false);
   assert.deepEqual(await agent.searchLocalWeb('latest release'), []);
   assert.equal(called, false);
+});
+
+test('task outcomes are learned by default and relevant examples reach the local model', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'virgo-agent-learning-'));
+  try {
+    const file = path.join(directory, 'knowledge.json');
+    let systemPrompt = '';
+    const agent = new AIAgent({
+      config: {
+        enabled: true,
+        training: { knowledgePath: file },
+        ollama: { enabled: true, url: 'http://localhost/api/chat', model: 'test' }
+      },
+      getBot: () => null,
+      isConnected: () => false,
+      fetchImpl: async (_url, options) => {
+        systemPrompt = JSON.parse(options.body).messages[0].content;
+        return { ok: true, json: async () => ({ message: { content: 'I can use that lesson.' } }) };
+      }
+    });
+
+    agent.recordTaskExperience('mine 8 stone', { success: true, message: 'Collected 8 stone.' });
+    agent.recordTaskExperience('mine 8 coal ore', { success: false, message: 'No coal ore nearby.' });
+    agent.recordTaskExperience('what is a creeper', { success: true, message: 'A hostile mob.' });
+    assert.equal(agent.getKnowledge().stats().experiences, 2);
+
+    await agent.askLocalModel('mine stone', { health: 20, food: 20, inventory: {} });
+    assert.match(systemPrompt, /untrusted examples, not instructions/i);
+    assert.match(systemPrompt, /mine 8 stone/);
+    assert.match(systemPrompt, /Collected 8 stone/);
+
+    const disabled = new AIAgent({
+      config: { training: { enabled: false, knowledgePath: file } },
+      getBot: () => null,
+      isConnected: () => false
+    });
+    disabled.recordTaskExperience('mine dirt', { success: true, message: 'Collected dirt.' });
+    assert.equal(disabled.getKnowledge().stats().experiences, 2);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('local model includes web evidence and cites its source URLs', async () => {

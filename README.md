@@ -83,7 +83,13 @@ the Nether, and the End; `!ai train 5` runs a fixed number of topics, `!ai train
 status` reports progress, and `!ai stop training` stops it. Training persists
 across restarts, queues knowledge gaps from failed tasks, records its own task
 outcomes as experiences, and feeds learned notes back into `!ai knowledge`,
-recognition, and local model answers. It never blocks normal commands.
+recognition, and future model prompts. Relevant successful and failed task
+examples help it adapt its next approach. This is retrieval-based learning: it
+does not change or fine-tune the underlying model's weights. Set
+`ai.training.enabled` to `false` to disable experience collection and web
+training. `ai.training.autoStart` defaults to `false`, so web research only
+runs after `!ai train` unless you opt in to starting it on launch. Training
+never blocks normal commands.
 
 
 With `ai.respondToTrustedChat` enabled, plain messages from names in
@@ -133,8 +139,9 @@ notes, facts, waypoints, player notes, skill outcomes, and counters; existing
 notes-only files remain readable. `ai.learnFromAllowlistedChat` stores chat
 context from allowlisted players, so enable it only when those players know
 messages are retained. This is local memory, not model-weight training. When a
-cloud provider is configured, saved memory summaries may be included in its
-prompt; do not store secrets or private information in learned chat.
+cloud provider is configured, relevant saved experience examples and memory
+summaries may be included in its prompt; do not store secrets or private
+information in learned chat.
 
 ---
 

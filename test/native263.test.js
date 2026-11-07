@@ -15,12 +15,16 @@ test('native 26.3 data resolves protocol 777 and data version 5023', () => {
   assert.equal(data.version.dataVersion, 5023);
 });
 
-test('26.3 uses the configured fallback when the protocol stack lacks native support', () => {
+test('26.3 uses the native client when supported, otherwise the configured fallback', () => {
   const resolution = resolveBotVersion({
     server: { version: '26.3', 'proxy-version-fallback': '26.1' }
   });
 
-  assert.deepEqual(resolution, { version: '26.1', requested: '26.3', fallback: true });
+  if (minecraftProtocol.supportedVersions.includes('26.3')) {
+    assert.deepEqual(resolution, { version: '26.3', requested: '26.3', fallback: false });
+  } else {
+    assert.deepEqual(resolution, { version: '26.1', requested: '26.3', fallback: true });
+  }
 });
 
 test('protocol 777 decodes the captured configuration feature-flags frame', () => {

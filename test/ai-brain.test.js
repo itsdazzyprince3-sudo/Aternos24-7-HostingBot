@@ -119,6 +119,22 @@ test('autonomous planner sleeps only at night when a bed is available and the ar
   assert.notEqual(unsafeNight.skill, 'sleep');
 });
 
+test('explicit wood-grind goals override the automatic failure cooldown', () => {
+  const memory = { getSkill: name => name === 'goal:gatherWood' ? {
+    failures: 1,
+    lastDetail: 'I could not find reachable logs nearby, even after scouting.',
+    lastUsedAt: new Date().toISOString()
+  } : null };
+  const goal = chooseGoal({
+    health: 20,
+    food: 20,
+    inventory: {},
+    nearbyBlocks: []
+  }, memory, { goal: 'wood' });
+  assert.equal(goal.skill, 'gatherWood');
+  assert.match(goal.reason, /requested wood grind/i);
+});
+
 
 test('memory inspection and erase phrases map to explicit local commands', () => {
   assert.equal(parseLocalIntent('memory').type, 'memory');
