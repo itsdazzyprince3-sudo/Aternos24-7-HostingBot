@@ -181,6 +181,15 @@ test('new physical skills parse from natural phrases', () => {
     (({ item, count }) => ({ item, count }))(parseLocalIntent('take 4 diamond from chest')),
     { item: 'diamond', count: 4 }
   );
+  assert.equal(parseLocalIntent('drop').type, 'drop');
+  assert.equal(parseLocalIntent('drop 1 diamond').item, 'diamond');
+  assert.equal(parseLocalIntent('toss item').type, 'drop');
+  assert.equal(parseLocalIntent('look at me').type, 'look');
+  assert.equal(parseLocalIntent('look up').type, 'look');
+  assert.equal(parseLocalIntent('slot 3').type, 'slot');
+  assert.equal(parseLocalIntent('slot 3').slot, 3);
+  assert.equal(parseLocalIntent('swing').type, 'swing');
+  assert.equal(parseLocalIntent('use').type, 'use');
 });
 
 test('recognition, research, knowledge, and training phrases route locally', () => {

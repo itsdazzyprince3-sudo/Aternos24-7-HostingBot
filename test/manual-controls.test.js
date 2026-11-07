@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   ManualControlSession,
+  performManualAction,
   setManualControl,
   releaseManualControls
 } = require('../lib/manual-controls');
@@ -79,4 +80,37 @@ test('manual control lease releases held inputs if the web client disappears', (
   assert.deepEqual(bot.calls, [['stop'], ['forward', true], ['forward', false]]);
   assert.equal(session.active.size, 0);
   assert.deepEqual(expirations, [null]);
+});
+
+test('performManualAction executes drop, attack, use, slot, and look', async () => {
+  const actions = [];
+  const fakeBot = {
+    heldItem: { name: 'diamond_sword', type: 101, count: 1 },
+    toss: async (type, meta, count) => actions.push(['toss', type, count]),
+    swingArm: hand => actions.push(['swing', hand]),
+    activateItem: () => actions.push(['activateItem']),
+    setQuickBarSlot: slot => actions.push(['setQuickBarSlot', slot]),
+    look: async (yaw, pitch) => actions.push(['look', yaw, pitch]),
+    entity: { yaw: 0, pitch: 0 }
+  };
+
+  const dropRes = await performManualAction(fakeBot, 'drop');
+  assert.equal(dropRes.action, 'drop');
+  assert.deepEqual(actions[0], ['toss', 101, 1]);
+
+  const attackRes = await performManualAction(fakeBot, 'attack');
+  assert.equal(attackRes.action, 'swing');
+  assert.deepEqual(actions[1], ['swing', 'right']);
+
+  const useRes = await performManualAction(fakeBot, 'use');
+  assert.equal(useRes.action, 'use');
+  assert.deepEqual(actions[2], ['activateItem']);
+
+  const slotRes = await performManualAction(fakeBot, 'slot', { slot: 4 });
+  assert.equal(slotRes.action, 'slot');
+  assert.deepEqual(actions[3], ['setQuickBarSlot', 4]);
+
+  const lookRes = await performManualAction(fakeBot, 'look', { yaw: 1.2, pitch: -0.4 });
+  assert.equal(lookRes.action, 'look');
+  assert.deepEqual(actions[4], ['look', 1.2, -0.4]);
 });

@@ -252,3 +252,51 @@ test('comeToPlayer navigates to players beyond 64 blocks without distance limits
   assert.equal(destination.x, 100);
   assert.equal(destination.z, 120);
 });
+
+test('skills execute drop, look, hotbar slot, swing, and use actions', async () => {
+  const log = [];
+  const fakeBot = {
+    username: 'virgo_bot',
+    heldItem: { name: 'iron_ingot', type: 42, count: 5 },
+    inventory: {
+      items: () => [{ name: 'iron_ingot', type: 42, count: 5 }]
+    },
+    registry: { itemsByName: { iron_ingot: { id: 42, name: 'iron_ingot' } } },
+    entity: { position: new Vec3(0, 64, 0), yaw: 0, pitch: 0 },
+    entities: {},
+    players: {},
+    toss: async (id, meta, count) => log.push(['toss', id, count]),
+    setQuickBarSlot: slot => log.push(['slot', slot]),
+    swingArm: hand => log.push(['swing', hand]),
+    activateItem: () => log.push(['activateItem']),
+    look: async (yaw, pitch) => log.push(['look', yaw, pitch]),
+    lookAt: async (pos) => log.push(['lookAt', pos])
+  };
+
+  const skills = makeSkills(fakeBot);
+
+  // Drop
+  const dropRes = await skills.dropItem('iron_ingot', 2);
+  assert.match(dropRes.message, /Dropped 2 iron ingot/);
+  assert.deepEqual(log[0], ['toss', 42, 2]);
+
+  // Slot
+  const slotRes = await skills.selectSlot(4);
+  assert.match(slotRes.message, /Selected hotbar slot 4/);
+  assert.deepEqual(log[1], ['slot', 3]);
+
+  // Swing
+  const swingRes = await skills.swingArm();
+  assert.match(swingRes.message, /Swung arm/);
+  assert.deepEqual(log[2], ['swing', 'right']);
+
+  // Use
+  const useRes = await skills.useHeldItem();
+  assert.match(useRes.message, /Used held item/);
+  assert.deepEqual(log[3], ['activateItem']);
+
+  // Look
+  const lookRes = await skills.lookAtTarget('up');
+  assert.match(lookRes.message, /Looking straight up/);
+  assert.equal(log[4][0], 'look');
+});

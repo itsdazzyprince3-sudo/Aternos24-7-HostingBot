@@ -227,15 +227,38 @@ app.get('/', (req, res) => {
           </div>
           <div class="card">
             <div class="label">Manual bot controls</div>
-            <p class="control-help">Use W/A/S/D or hold the buttons. Space jumps, Shift sneaks, and Ctrl sprints. Manual movement pauses the patrol; releasing controls lets it resume.</p>
+            <p class="control-help">Use W/A/S/D to move, Space to jump, Shift to sneak, Ctrl to sprint. Press Q to drop held items, Left-Click to attack/mine, Right-Click to use/place, F to swap offhand, and 1-9 for hotbar slots.</p>
             <div class="control-grid" aria-label="Movement controls">
               <span></span><button class="control-key" type="button" data-control="forward">W / ↑</button><span></span>
               <button class="control-key" type="button" data-control="left">A / ←</button>
               <button class="control-key" type="button" data-control="back">S / ↓</button>
               <button class="control-key" type="button" data-control="right">D / →</button>
-              <button class="control-key" type="button" data-control="jump">Jump</button>
-              <button class="control-key" type="button" data-control="sneak">Sneak</button>
-              <button class="control-key" type="button" data-control="sprint">Sprint</button>
+              <button class="control-key" type="button" data-control="jump">Jump (Space)</button>
+              <button class="control-key" type="button" data-control="sneak">Sneak (Shift)</button>
+              <button class="control-key" type="button" data-control="sprint">Sprint (Ctrl)</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;">
+              <button class="control-key action-btn" type="button" data-action="attack">⚔️ Attack (L-Click)</button>
+              <button class="control-key action-btn" type="button" data-action="use">🛡️ Use / Place (R-Click)</button>
+              <button class="control-key action-btn" type="button" data-action="drop">🎁 Drop (Q)</button>
+              <button class="control-key action-btn" type="button" data-action="swap_hand">🔄 Swap Hand (F)</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin-top:8px;">
+              <button class="control-key slot-btn" type="button" data-slot="1">1</button>
+              <button class="control-key slot-btn" type="button" data-slot="2">2</button>
+              <button class="control-key slot-btn" type="button" data-slot="3">3</button>
+              <button class="control-key slot-btn" type="button" data-slot="4">4</button>
+              <button class="control-key slot-btn" type="button" data-slot="5">5</button>
+              <button class="control-key slot-btn" type="button" data-slot="6">6</button>
+              <button class="control-key slot-btn" type="button" data-slot="7">7</button>
+              <button class="control-key slot-btn" type="button" data-slot="8">8</button>
+              <button class="control-key slot-btn" type="button" data-slot="9">9</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;">
+              <button class="control-key aim-btn" type="button" data-aim="up">Look Up</button>
+              <button class="control-key aim-btn" type="button" data-aim="down">Look Down</button>
+              <button class="control-key aim-btn" type="button" data-aim="left">Look Left</button>
+              <button class="control-key aim-btn" type="button" data-aim="right">Look Right</button>
             </div>
             <p class="control-status" id="control-status" aria-live="polite">Enter the dashboard token to enable controls.</p>
           </div>
@@ -365,6 +388,49 @@ app.get('/', (req, res) => {
               controlStatus.innerText = error.message;
             });
           }
+          const actionButtons = [...document.querySelectorAll('[data-action]')];
+          const slotButtons = [...document.querySelectorAll('[data-slot]')];
+          const aimButtons = [...document.querySelectorAll('[data-aim]')];
+          const allInteractiveButtons = [...controlButtons, ...actionButtons, ...slotButtons, ...aimButtons];
+
+          async function performAction(action, payload = {}) {
+            if (!dashboardTokenInput.value) {
+              controlStatus.innerText = 'Enter DASHBOARD_TOKEN to use controls.';
+              return;
+            }
+            try {
+              const res = await aiRequest('/api/control/action', { action, payload });
+              controlStatus.innerText = res.message || `Action ${action} executed.`;
+            } catch (err) {
+              controlStatus.innerText = err.message;
+            }
+          }
+
+          actionButtons.forEach(btn => {
+            btn.addEventListener('click', () => performAction(btn.dataset.action));
+          });
+          slotButtons.forEach(btn => {
+            btn.addEventListener('click', () => performAction('slot', { slot: parseInt(btn.dataset.slot, 10) - 1 }));
+          });
+          aimButtons.forEach(btn => {
+            btn.addEventListener('click', async () => {
+              const dir = btn.dataset.aim;
+              try {
+                const health = await fetch('/health');
+                const hData = await health.json();
+                const coords = hData.coords || { x: 0, y: 64, z: 0 };
+                let target = { ...coords };
+                if (dir === 'up') target.y += 10;
+                else if (dir === 'down') target.y -= 10;
+                else if (dir === 'left') target.x -= 10;
+                else if (dir === 'right') target.x += 10;
+                await performAction('lookAt', target);
+              } catch (e) {
+                await performAction('aim', { dir });
+              }
+            });
+          });
+
           for (const button of controlButtons) {
             const input = button.dataset.control;
             button.addEventListener('pointerdown', event => {
@@ -376,9 +442,26 @@ app.get('/', (req, res) => {
             button.addEventListener('pointercancel', () => setControl(input, false));
             button.addEventListener('lostpointercapture', () => setControl(input, false));
           }
+
           document.addEventListener('keydown', event => {
             if (event.target.matches('input, textarea, select, [contenteditable="true"]')) return;
-            const input = keyControls.get(event.key.toLowerCase());
+            const key = event.key.toLowerCase();
+            if (key === 'q') {
+              event.preventDefault();
+              performAction('drop', { count: event.ctrlKey ? 64 : 1 });
+              return;
+            }
+            if (key === 'f') {
+              event.preventDefault();
+              performAction('swap_hand');
+              return;
+            }
+            if (key >= '1' && key <= '9') {
+              event.preventDefault();
+              performAction('slot', { slot: parseInt(key, 10) - 1 });
+              return;
+            }
+            const input = keyControls.get(key);
             if (!input) return;
             event.preventDefault();
             if (!event.repeat) setControl(input, true);
@@ -408,10 +491,10 @@ app.get('/', (req, res) => {
           }, 1000);
           dashboardTokenInput.addEventListener('input', () => {
             const enabled = Boolean(dashboardTokenInput.value);
-            controlButtons.forEach(button => { button.disabled = !enabled; });
+            allInteractiveButtons.forEach(button => { button.disabled = !enabled; });
             if (!enabled) releaseAllControls('Enter the dashboard token to enable controls.');
           });
-          controlButtons.forEach(button => { button.disabled = true; });
+          allInteractiveButtons.forEach(button => { button.disabled = true; });
           async function refreshAIStatus() {
             if (!dashboardTokenInput.value) return;
             try {
@@ -549,6 +632,22 @@ app.post('/api/control/input', (req, res) => {
   } catch (error) {
     const status = error instanceof TypeError ? 400 : 500;
     res.status(status).json({ error: error.message });
+  }
+});
+
+app.post('/api/control/action', async (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503)
+      .json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  if (!botState.connected || !bot) {
+    return res.status(503).json({ error: 'The Minecraft bot is not connected yet.' });
+  }
+  try {
+    const result = await manualControlSession.performAction(req.body?.action, req.body?.payload);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
