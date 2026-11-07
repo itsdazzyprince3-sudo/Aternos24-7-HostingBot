@@ -68,6 +68,23 @@ different tactic instead of repeating the same attempt. During autonomous
 grinding it also spends calm windows on upgrades such as a better pickaxe,
 torches, iron reserves, armor, or farm upkeep.
 
+Recognition is built into the same loop. `!ai recognize` (also
+`!ai what do you see`) classifies nearby blocks, ores, hazards, animals, hostile
+mobs, players, tools, armor, and food, then gives a field assessment such as
+"diamond ore needs a tier-3 pickaxe" or "lava is close, do not dig down". Crashing
+creeper recognition changes the plan; valuable ore recognition becomes an
+autonomous mining candidate when the area is calm.
+
+The bot can train itself from the web without an API key. `!ai research creeper`
+fetches the Minecraft Wiki, extracts verifiable sentences, and stores them in
+`data/ai-knowledge.json`. `!ai train` starts an unlimited background curriculum
+(every 90 seconds by default) covering mining, mobs, farming, combat, enchanting,
+the Nether, and the End; `!ai train 5` runs a fixed number of topics, `!ai train
+status` reports progress, and `!ai stop training` stops it. Training persists
+across restarts, queues knowledge gaps from failed tasks, records its own task
+outcomes as experiences, and feeds learned notes back into `!ai knowledge`,
+recognition, and local model answers. It never blocks normal commands.
+
 
 With `ai.respondToTrustedChat` enabled, plain messages from names in
 `ai.allowedUsers` are sent to the configured AI provider. Colloquial variants

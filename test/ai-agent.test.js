@@ -951,7 +951,7 @@ test('local web search is opt-in, bounded, and rejects non-HTTPS result links', 
 test('local web search does not run unless enabled in settings', async () => {
   let called = false;
   const agent = new AIAgent({
-    config: { enabled: true, search: { enabled: false } },
+    config: { enabled: true, webSearch: false, search: { enabled: false } },
     getBot: () => null,
     isConnected: () => false,
     fetchImpl: async () => { called = true; throw new Error('should not be called'); }
@@ -1239,4 +1239,65 @@ test('auto provider prefers a separate OpenAI key over a configured Gemini fallb
       else process.env[key] = value;
     }
   }
+});
+
+test('local web search falls back to the built-in wiki trainer without Tavily', async () => {
+  const results = await (async () => {
+    const agent = new AIAgent({
+      config: {
+        enabled: true,
+        webSearch: true,
+        search: { enabled: false },
+        training: { knowledgePath: `${require('node:os').tmpdir()}/virgo-agent-knowledge-${process.pid}.json` }
+      },
+      getBot: () => null,
+      isConnected: () => false,
+      fetchImpl: async url => {
+        const target = String(url);
+        if (target.includes('minecraft.wiki') && target.includes('list=search')) {
+          return { ok: true, json: async () => ({ query: { search: [{ title: 'Creeper', snippet: 'Creeper is a hostile mob.' }] } }) };
+        }
+        if (target.includes('minecraft.wiki') && target.includes('prop=extracts')) {
+          return { ok: true, json: async () => ({ query: { pages: { 1: { extract: 'A creeper is a hostile mob that explodes near players.' } } } }) };
+        }
+        return { ok: false, json: async () => ({}) };
+      }
+    });
+    assert.equal(agent.shouldSearchLocal('What is the latest Minecraft release?'), true);
+    return agent.searchLocalWeb('creeper behavior');
+  })();
+  assert.equal(results[0].title, 'Creeper');
+  assert.match(results[0].content, /hostile mob/);
+});
+
+test('local recognition command reports recognized resources and threats', async () => {
+  const agent = new AIAgent({
+    config: {
+      enabled: true,
+      training: { knowledgePath: `${require('node:os').tmpdir()}/virgo-recognition-knowledge-${process.pid}.json` }
+    },
+    getBot: () => ({}),
+    isConnected: () => true,
+    memory: noOpMemory
+  });
+  agent.createSkills = () => ({
+    observation: () => ({
+      health: 18,
+      food: 20,
+      inventory: { stone_pickaxe: 1 },
+      nearbyBlocks: [{ name: 'iron_ore', distance: 4 }, { name: 'lava', distance: 6 }],
+      nearbyHostiles: [{ name: 'zombie', distance: 14 }],
+      nearbyEntities: [],
+      players: {},
+      time: { isDay: true }
+    })
+  });
+  agent.start('recognize');
+  for (let attempt = 0; attempt < 40 && agent.getStatus().status === 'working'; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(agent.getStatus().status, 'completed');
+  assert.match(agent.getStatus().message, /I recognize/);
+  assert.match(agent.getStatus().message, /iron_ore/);
+  assert.match(agent.getStatus().message, /zombie/);
 });

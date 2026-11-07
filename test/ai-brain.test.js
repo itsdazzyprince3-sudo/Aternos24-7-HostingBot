@@ -166,3 +166,22 @@ test('new physical skills parse from natural phrases', () => {
     { item: 'diamond', count: 4 }
   );
 });
+
+test('recognition, research, knowledge, and training phrases route locally', () => {
+  assert.equal(parseLocalIntent('recognize').type, 'recognize');
+  assert.equal(parseLocalIntent('what do you see').type, 'recognize');
+  assert.equal(parseLocalIntent('research creeper').type, 'research');
+  assert.equal(parseLocalIntent('learn about diamond ore').type, 'research');
+  assert.equal(parseLocalIntent('train on nether portal').topic, 'nether portal');
+  assert.equal(parseLocalIntent('what do you know about creeper').type, 'knowledge');
+  assert.equal(parseLocalIntent('tell me about iron ore').query, 'iron ore');
+  assert.equal(parseLocalIntent('train').type, 'train');
+  assert.equal(parseLocalIntent('train 5 cycles').iterations, 5);
+  assert.equal(parseLocalIntent('stop training').action, 'stop');
+  assert.equal(parseLocalIntent('train status').action, 'status');
+  assert.equal(parseLocalIntent('Search the web for current information.').type, 'chat');
+  assert.equal(parseLocalIntent('train creeper').type, 'research');
+  assert.equal(parseLocalIntent('train creeper').topic, 'creeper');
+  assert.equal(parseLocalIntent('train on creeper').type, 'research');
+  assert.equal(parseLocalIntent('train on creeper').topic, 'creeper');
+});

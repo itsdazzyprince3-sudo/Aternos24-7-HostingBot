@@ -5,3 +5,5 @@ settings.json
 launcher_accounts.json
 *.log
 /data/ai-memory.json
+/data/ai-knowledge.json
+ai-knowledge.json
