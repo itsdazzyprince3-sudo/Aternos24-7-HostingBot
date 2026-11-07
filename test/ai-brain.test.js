@@ -200,6 +200,10 @@ test('recognition, research, knowledge, and training phrases route locally', () 
   assert.equal(parseLocalIntent('train creeper').topic, 'creeper');
   assert.equal(parseLocalIntent('train on creeper').type, 'research');
   assert.equal(parseLocalIntent('train on creeper').topic, 'creeper');
+  assert.equal(parseLocalIntent('train 10 hours').type, 'train');
+  assert.equal(parseLocalIntent('train 10 hours').durationMs, 36000000);
+  assert.equal(parseLocalIntent('train for 30 minutes').durationMs, 1800000);
+  assert.equal(parseLocalIntent('train 5').iterations, 5);
 });
 
 test('conversational AI engine answers identity, math, jokes, and lore', () => {

@@ -224,3 +224,31 @@ test('withdraw pulls the requested amount from a nearby chest', async () => {
   assert.match(result.message, /Withdrew 9 iron ingot/);
   assert.deepEqual(withdrawn, [5, 4]);
 });
+
+test('comeToPlayer navigates to players beyond 64 blocks without distance limits', async () => {
+  let destination = null;
+  const playerEntity = {
+    position: new Vec3(100, 64, 120) // ~156 blocks away
+  };
+  const bot = {
+    username: 'virgo_bot',
+    entity: { position: new Vec3(0, 64, 0) },
+    inventory: { items: () => [] },
+    entities: {},
+    players: {
+      paneer: { username: 'paneer', entity: playerEntity }
+    }
+  };
+  const skills = makeSkills(bot);
+  skills.goto = async goal => {
+    destination = goal;
+    // Simulate arriving at player position
+    bot.entity.position = new Vec3(playerEntity.position.x, playerEntity.position.y, playerEntity.position.z);
+    return true;
+  };
+
+  const result = await skills.comeToPlayer('paneer');
+  assert.match(result.message, /next to you, paneer/);
+  assert.equal(destination.x, 100);
+  assert.equal(destination.z, 120);
+});
