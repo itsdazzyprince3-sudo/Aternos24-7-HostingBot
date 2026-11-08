@@ -118,6 +118,21 @@
       "autoStart": false
     }
   },
+  "view": {
+    "enabled": false,
+    "port": 31337,
+    "w": 64,
+    "h": 48,
+    "d": 64,
+    "fps": 6,
+    "viewerUrl": "http://127.0.0.1:8080"
+  },
+  "vision": {
+    "enabled": false,
+    "model": "llava",
+    "intervalMs": 4000,
+    "dryRun": false
+  },
   "combat": {
     "attack-mobs": true,
     "auto-eat": true

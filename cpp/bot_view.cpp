@@ -28,6 +28,7 @@ static int RES_W = 480, RES_H = 270;
 static float FOV = 1.2217f; // 70 deg
 static float YAW_SIGN = 1.0f, PITCH_SIGN = 1.0f; // flip to -1 if view is mirrored for your protocol
 static std::string FRAME_HOST = "127.0.0.1";
+static std::string HTTP_HOST = "127.0.0.1"; // local-only; remote access should use the token-protected dashboard proxy
 static int FRAME_PORT = 31337;
 static int HTTP_PORT = 8080;
 static bool MOCK = false;
@@ -55,8 +56,8 @@ static const uint8_t SKY[3] = {135,206,235};
 
 struct Ent { float rel[3]; uint8_t kind; std::string name; };
 struct Frame {
-  float eye[3]; float yaw, pitch; int origin[3]; int W,H,D;
-  std::vector<uint8_t> grid; std::vector<Ent> ents;
+  float eye[3]; float yaw, pitch, skyFactor=1.0f; int origin[3]; int W,H,D;
+  std::vector<uint8_t> grid, lights; std::vector<Ent> ents;
   long long ts = 0;
 };
 
@@ -93,6 +94,10 @@ static uint8_t kindAt(const Frame& f, int x,int y,int z){
   if(x<0||y<0||z<0||x>=f.W||y>=f.H||z>=f.D) return 0;
   return f.grid[(size_t)x + (size_t)f.W*z + (size_t)f.W*f.D*y];
 }
+static uint8_t lightAt(const Frame& f, int x,int y,int z){
+  if(x<0||y<0||z<0||x>=f.W||y>=f.H||z>=f.D) return 255;
+  return f.lights[(size_t)x + (size_t)f.W*z + (size_t)f.W*f.D*y];
+}
 
 // ---- raycast one pixel into framebuffer ----
 static void renderFrame(const Frame& f, std::vector<uint8_t>& fb, int W,int H){
@@ -106,19 +111,19 @@ static void renderFrame(const Frame& f, std::vector<uint8_t>& fb, int W,int H){
   if(fabsf(dot(fwd,upw))>0.99f){ upw[0]=0;upw[1]=0;upw[2]=1; }
   float right[3]; cross(fwd,upw,right); normv(right);
   float up[3]; cross(right,fwd,up); normv(up);
-  float focal = (W/2.0f)/tanf(FOV/2.0f);
+  float tanHalf = tanf(FOV/2.0f);
+  float focal = (W/2.0f)/tanHalf;
   float maxDist = (float)std::max(f.W,std::max(f.H,f.D));
   for(int py=0; py<H; ++py){
     for(int px=0; px<W; ++px){
       float nx = (2.0f*(px+0.5f)/W - 1.0f);
       float ny = (1.0f - 2.0f*(py+0.5f)/H);
-      float dir[3] = { fwd[0]+right[0]*nx*focal/(W/2.0f)* (W/2.0f), fwd[1]+up[1]*ny*focal/(W/2.0f)*(W/2.0f), 0 };
-      // simpler: ray = fwd + right*nx*tanHalf + up*ny*tanHalf*aspect
-      float tanHalf = tanf(FOV/2.0f);
+      float dir[3];
+      // FOV is horizontal, matching a typical Minecraft first-person camera.
       float aspect = (float)W/(float)H;
-      dir[0] = fwd[0] + right[0]*nx*tanHalf*aspect + up[0]*ny*tanHalf;
-      dir[1] = fwd[1] + right[1]*nx*tanHalf*aspect + up[1]*ny*tanHalf;
-      dir[2] = fwd[2] + right[2]*nx*tanHalf*aspect + up[2]*ny*tanHalf;
+      dir[0] = fwd[0] + right[0]*nx*tanHalf + up[0]*ny*tanHalf/aspect;
+      dir[1] = fwd[1] + right[1]*nx*tanHalf + up[1]*ny*tanHalf/aspect;
+      dir[2] = fwd[2] + right[2]*nx*tanHalf + up[2]*ny*tanHalf/aspect;
       normv(dir);
       // DDA
       int ix=(int)floorf(e[0]), iy=(int)floorf(e[1]), iz=(int)floorf(e[2]);
@@ -148,6 +153,8 @@ static void renderFrame(const Frame& f, std::vector<uint8_t>& fb, int W,int H){
       if(hit){
         uint8_t k = kindAt(f,ix,iy,iz);
         const uint8_t* base = PAL[k<16?k:15];
+        const uint8_t light = lightAt(f,ix,iy,iz);
+        const float worldLight = light==255 ? 0.72f : 0.12f + 0.88f*(float)light/15.0f;
         float b;
         if(lastAxis==1) b = (stepY>0)?0.5f:1.0f;     // bottom/top
         else if(lastAxis==0) b = 0.8f;                // x side
@@ -155,9 +162,10 @@ static void renderFrame(const Frame& f, std::vector<uint8_t>& fb, int W,int H){
         // fog
         float fog = 1.0f - std::min(1.0f, t/maxDist);
         fog = fog*0.85f + 0.15f;
-        col[0] = (uint8_t)(base[0]*b*fog + SKY[0]*(1.0f-fog));
-        col[1] = (uint8_t)(base[1]*b*fog + SKY[1]*(1.0f-fog));
-        col[2] = (uint8_t)(base[2]*b*fog + SKY[2]*(1.0f-fog));
+        const float shade = b * worldLight;
+        col[0] = (uint8_t)(base[0]*shade*fog + SKY[0]*(1.0f-fog));
+        col[1] = (uint8_t)(base[1]*shade*fog + SKY[1]*(1.0f-fog));
+        col[2] = (uint8_t)(base[2]*shade*fog + SKY[2]*(1.0f-fog));
       }
       size_t off = ((size_t)py*W + px)*3;
       fb[off]=col[0]; fb[off+1]=col[1]; fb[off+2]=col[2];
@@ -191,6 +199,7 @@ static Frame mockFrame(){
   f.W=64; f.H=48; f.D=64;
   f.origin[0]=-32; f.origin[1]=0; f.origin[2]=-32;
   f.grid.assign((size_t)f.W*f.H*f.D, 0);
+  f.lights.assign((size_t)f.W*f.H*f.D, 10);
   auto set=[&](int x,int y,int z,uint8_t k){ if(x>=0&&y>=0&&z>=0&&x<f.W&&y<f.H&&z<f.D) f.grid[(size_t)x+f.W*z+f.W*f.D*y]=k; };
   for(int x=0;x<f.W;++x) for(int z=0;z<f.D;++z){ set(x,0,z,3); set(x,1,z,2); set(x,2,z,1); }
   for(int x=8;x<12;++x) for(int z=8;z<12;++z) set(x,3,z,4);
@@ -219,19 +228,24 @@ static void frameClient(){
     int one=1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     // read frames
     while(g_running.load()){
-      uint8_t head[43];
-      if(!readn(fd, head, 43)) break;
-      if(memcmp(head,"VFRM",4)!=0) break;
+      uint8_t head[47];
+      if(!readn(fd, head, 47)) break;
+      if(memcmp(head,"VFRM",4)!=0 || head[4]!=2) break;
       // version head[4]
       Frame nf;
       nf.eye[0]=rdF32(head+5); nf.eye[1]=rdF32(head+9); nf.eye[2]=rdF32(head+13);
       nf.yaw=rdF32(head+17); nf.pitch=rdF32(head+21);
       nf.origin[0]=rdI32(head+25); nf.origin[1]=rdI32(head+29); nf.origin[2]=rdI32(head+33);
       nf.W=rdU16(head+37); nf.H=rdU16(head+39); nf.D=rdU16(head+41);
+      nf.skyFactor=rdF32(head+43);
+      if(!std::isfinite(nf.skyFactor)) nf.skyFactor=1.0f;
+      nf.skyFactor=std::max(0.0f,std::min(1.0f,nf.skyFactor));
       if(nf.W<=0||nf.W>512||nf.H<=0||nf.H>512||nf.D<=0||nf.D>512) break;
       size_t gridN=(size_t)nf.W*nf.H*nf.D;
       nf.grid.resize(gridN);
       if(!readn(fd, nf.grid.data(), gridN)) break;
+      nf.lights.resize(gridN);
+      if(!readn(fd, nf.lights.data(), gridN)) break;
       uint8_t ec[2];
       if(!readn(fd, ec, 2)) break;
       int entCount = rdU16(ec);
@@ -320,10 +334,12 @@ static void httpServer(){
   int srv=socket(AF_INET,SOCK_STREAM,0);
   int one=1; setsockopt(srv,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
   sockaddr_in addr{}; addr.sin_family=AF_INET; addr.sin_port=htons(HTTP_PORT);
-  addr.sin_addr.s_addr=htonl(INADDR_ANY);
+  if(inet_pton(AF_INET, HTTP_HOST.c_str(), &addr.sin_addr)!=1){
+    fprintf(stderr,"[View] invalid HTTP bind address: %s\n",HTTP_HOST.c_str()); close(srv); return;
+  }
   if(bind(srv,(sockaddr*)&addr,sizeof(addr))!=0){ fprintf(stderr,"[View] bind %d failed: %s\n",HTTP_PORT,strerror(errno)); return; }
   if(listen(srv,16)!=0){ fprintf(stderr,"[View] listen failed\n"); return; }
-  printf("[View] HTTP viewer on http://0.0.0.0:%d/  (mock=%d)\n", HTTP_PORT, MOCK?1:0);
+  printf("[View] HTTP viewer on http://%s:%d/  (mock=%d)\n", HTTP_HOST.c_str(), HTTP_PORT, MOCK?1:0);
   fflush(stdout);
   while(g_running.load()){
     int c=accept(srv,nullptr,nullptr);
@@ -344,7 +360,7 @@ static void httpServer(){
 "<body><img id=v src=/frame><div id=s style=position:fixed;top:4px;left:6px;font-size:12px></div>"
 "<script>const v=document.getElementById('v'),s=document.getElementById('s');"
 "setInterval(()=>{v.src='/frame?'+Date.now();},140);"
-"setInterval(()=>{fetch('/state').then(r=>r.text()).then(t=>s.textContent=t).catch(()=>{});},1000);"
+"setInterval(()=>{fetch('/state').then(r=>r.json()).then(t=>s.textContent='F3 | viewer '+t.fps+' FPS | XYZ '+t.eye.map(x=>x.toFixed(1)).join(' ')+' | yaw '+t.yaw.toFixed(2)+' pitch '+t.pitch.toFixed(2)+' | '+t.grid.join('x')+' | ents '+t.entities).catch(()=>{});},1000);"
 "</script></body></html>";
         httpReply(c,200,"text/html; charset=utf8",(const uint8_t*)html,strlen(html));
       } else if(strncmp(path,"/frame",6)==0){
@@ -355,11 +371,11 @@ static void httpServer(){
         else httpReply(c,200,"image/bmp",bmp.data(),bmp.size());
       } else if(strcmp(path,"/state")==0){
         Frame f; { std::lock_guard<std::mutex> lk(g_mtx); f=g_frame; }
-        char js[256];
+        char js[512];
         int n=snprintf(js,sizeof(js),
-          "fps=%d eye=%.1f,%.1f,%.1f yaw=%.2f grid=%dx%dx%d ents=%zu",
-          g_fps.load(), f.eye[0],f.eye[1],f.eye[2], f.yaw, f.W,f.H,f.D, f.ents.size());
-        httpReply(c,200,"text/plain",(const uint8_t*)js,(size_t)n);
+          "{\"fps\":%d,\"eye\":[%.3f,%.3f,%.3f],\"yaw\":%.5f,\"pitch\":%.5f,\"skyFactor\":%.3f,\"grid\":[%d,%d,%d],\"entities\":%zu}",
+          g_fps.load(), f.eye[0],f.eye[1],f.eye[2], f.yaw, f.pitch, f.skyFactor, f.W,f.H,f.D, f.ents.size());
+        httpReply(c,200,"application/json",(const uint8_t*)js,(size_t)n);
       } else {
         httpReply(c,404,"text/plain",(const uint8_t*)"404",3);
       }
@@ -376,6 +392,7 @@ int main(int argc,char**argv){
     else if(a=="--frame-host"&&i+1<argc) FRAME_HOST=argv[++i];
     else if(a=="--frame-port"&&i+1<argc) FRAME_PORT=atoi(argv[++i]);
     else if(a=="--http-port"&&i+1<argc) HTTP_PORT=atoi(argv[++i]);
+    else if(a=="--http-host"&&i+1<argc) HTTP_HOST=argv[++i];
     else if(a=="--w"&&i+1<argc) RES_W=atoi(argv[++i]);
     else if(a=="--h"&&i+1<argc) RES_H=atoi(argv[++i]);
     else if(a=="--yaw-sign"&&i+1<argc) YAW_SIGN=(float)atof(argv[++i]);

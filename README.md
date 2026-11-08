@@ -17,9 +17,10 @@ Mineflayer is configured to automatically request a respawn when the bot dies.
 A small web server runs alongside the bot. You can visit the URL your host gives
 you to see a live dashboard showing whether the bot is connected, its uptime,
 and its coordinates.
-The dashboard also provides token-protected keyboard and touch movement
-controls for the connected bot. It controls the Mineflayer bot; it is not a
-Minecraft game client and does not render a playable 3D world.
+The dashboard also provides token-protected keyboard and touch controls for the
+connected bot. An optional software-raycasted POV can be viewed there; this is
+reconstructed from loaded world data, not a Minecraft game client or a true
+client screenshot.
 
 For local use, start with `npm start`, open `http://127.0.0.1:5000`, and enter
 the same `DASHBOARD_TOKEN` you set before starting the process. Use W/A/S/D or
@@ -103,8 +104,9 @@ default and it should only be enabled for trusted players.
 Virgo can inspect nearby blocks, entities, players, position, health, food, and
 inventory; navigate to visible players; gather resources; craft and smelt items;
 eat, farm, build a basic shelter, sleep, explore, and store or deliver items.
-It reasons from this structured game state and does not capture or render a
-first-person screen. It fights nearby hostile mobs when instructed or while
+It reasons primarily from structured game state. With the optional viewer it
+also receives a software-rendered first-person approximation, not pixels from a
+real Minecraft client. It fights nearby hostile mobs when instructed or while
 surviving, retreats from creepers and low health, and does not attack players.
 Sleep is attempted only at night with a nearby or carried bed and no detected
 nearby hostile. Colored bed items are recognized. Death location and dimension
@@ -125,6 +127,35 @@ and pauses near hostiles, critical health, nearby hazards, or targets with large
 vertical gaps. At night, the planner prefers a safe bed; if none is available it
 can choose shelter work. Progress messages can be disabled with
 `ai.autonomous.chatProgress`.
+
+### Optional live POV, F3-style telemetry, and manual play
+
+To enable the reconstructed view, set `view.enabled` to `true`, compile the
+viewer with `g++ -O2 -std=c++17 -pthread cpp/bot_view.cpp -o /tmp/bot_view`,
+start the bot, then run `/tmp/bot_view --frame-port 31337 --http-port 8080` on
+the same machine. Enter the dashboard's `DASHBOARD_TOKEN` to see its protected
+POV and F3-style telemetry: bot coordinates, facing, yaw/pitch, dimension,
+time, health/food, nearby block and light values, loaded view-grid size, and
+software-renderer FPS. The viewer listens on localhost by default; the dashboard
+proxies frames and telemetry only through token-protected endpoints. Do not
+bind the standalone viewer to a public interface without adding your own
+authentication and TLS.
+
+The view is raycasted from blocks and entity positions Mineflayer currently has
+loaded. It has simplified block colors, entity billboards, and approximate
+shading from server-provided light values; it does not include Minecraft
+textures, player models, particles, GUI, weather effects, client-side gamma, or
+the real Java client's FPS. Viewer FPS is the C++ software renderer's rate, not
+Minecraft client FPS. `vision.enabled` optionally lets a local Ollama vision
+model inspect those reconstructed frames and choose bounded movement/look/use
+actions. Install/run Ollama and a compatible vision model first; it is disabled
+by default and should be tested with `vision.dryRun` before allowing it to act.
+
+Dashboard controls support movement (W/A/S/D, jump, sneak, sprint), hotbar 1-9,
+drop, swap hand, attack/use, and looking around by dragging the POV. These are
+the Mineflayer actions explicitly implemented here, not every vanilla client
+input: inventory screens, chat GUI, F3 client internals, mouse wheel item-use,
+and arbitrary modded controls are not emulated.
 
 Local web lookup for Ollama is opt-in: set `ai.search.enabled` to `true` and
 provide `TAVILY_API_KEY` in `.env`. Queries go to Tavily only for explicit web

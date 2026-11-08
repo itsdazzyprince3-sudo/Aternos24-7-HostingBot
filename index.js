@@ -310,6 +310,18 @@ app.get('/', (req, res) => {
               </div>
             </div>
           </div>
+          <div class="card" id="view-card">
+            <div class="label">Live first-person POV (reconstructed)</div>
+            <p class="control-help">Software-rendered from loaded Minecraft blocks and entities, not a real game-client screenshot. Drag to look; left/right click to attack/use. Viewer FPS is separate from Minecraft client FPS.</p>
+            <div style="position:relative;background:#020617;min-height:180px;overflow:hidden;border-radius:8px;">
+              <img id="bot-view-frame" alt="Reconstructed live first-person view of the Minecraft bot" style="display:block;width:100%;min-height:180px;max-height:56vh;object-fit:contain;touch-action:none;user-select:none;cursor:crosshair;">
+              <pre id="bot-view-f3" hidden style="position:absolute;top:8px;left:8px;margin:0;padding:8px;background:rgba(0,0,0,.78);color:#d1fae5;white-space:pre-wrap;font:12px/1.4 monospace;pointer-events:none;"></pre>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+              <button class="control-key action-btn" id="toggle-f3" type="button">Show F3 telemetry</button>
+              <span class="control-status" id="view-status" aria-live="polite">Viewer disabled or not running.</span>
+            </div>
+          </div>
           <div class="card">
             <div class="label">Manual bot controls</div>
             <p class="control-help">Use W/A/S/D to move, Space to jump, Shift to sneak, Ctrl to sprint. Press Q to drop held items, Left-Click to attack/mine, Right-Click to use/place, F to swap offhand, and 1-9 for hotbar slots.</p>
@@ -440,6 +452,117 @@ app.get('/', (req, res) => {
             if (!response.ok) throw new Error(result.error || 'Request failed.');
             return result;
           }
+          const viewFrame = document.getElementById('bot-view-frame');
+          const viewStatus = document.getElementById('view-status');
+          const f3Panel = document.getElementById('bot-view-f3');
+          const f3Button = document.getElementById('toggle-f3');
+          let currentViewState = null;
+          let currentFrameUrl = null;
+          let viewTimer = null;
+          let frameBusy = false;
+          let lastStateAt = 0;
+          let viewDrag = null;
+          let lastAimAt = 0;
+          function formatF3(state) {
+            const p = state.position || {};
+            const fix = value => Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '?';
+            return [
+              'XYZ: ' + fix(p.x) + ' / ' + fix(p.y) + ' / ' + fix(p.z) + '   Facing: ' + (state.facing || '?'),
+              'Yaw/Pitch: ' + fix(state.yawDegrees) + ' / ' + fix(state.pitchDegrees) + ' deg   Dimension: ' + (state.dimension || '?'),
+              'Viewer FPS: ' + (state.fps ?? '?') + ' (software renderer; not a Minecraft client FPS)',
+              'Light: block ' + (state.blockLight ?? '?') + ', sky ' + (state.skyLight ?? '?') + '   Biome: ' + (state.biome || '?'),
+              'Health/Food: ' + (state.health ?? '?') + '/20 / ' + (state.food ?? '?') + '/20   Held: ' + (state.heldItem || 'empty'),
+              'Time: ' + (state.timeOfDay ?? '?') + '   Loaded view grid: ' + ((state.grid || []).join(' x ') || '?'),
+              'Nearby entities: ' + (state.entities ?? '?') + '   World block: ' + (state.block || '?')
+            ].join(String.fromCharCode(10));
+          }
+          async function refreshView() {
+            let delay = 250;
+            if (!dashboardTokenInput.value) {
+              viewStatus.innerText = 'Enter DASHBOARD_TOKEN to view the protected POV.';
+              delay = 1000;
+            } else if (!frameBusy) {
+              frameBusy = true;
+              try {
+                const response = await fetch('/api/view/frame', {
+                  headers: { 'x-dashboard-token': dashboardTokenInput.value },
+                  cache: 'no-store'
+                });
+                if (!response.ok) {
+                  const result = await response.json().catch(() => ({}));
+                  throw new Error(result.error || 'View unavailable (' + response.status + ').');
+                }
+                const nextUrl = URL.createObjectURL(await response.blob());
+                const previousUrl = currentFrameUrl;
+                currentFrameUrl = nextUrl;
+                viewFrame.onload = () => { if (previousUrl) URL.revokeObjectURL(previousUrl); };
+                viewFrame.src = nextUrl;
+                viewStatus.innerText = 'Live reconstructed POV. Drag to look; click to act.';
+                if (Date.now() - lastStateAt > 900) {
+                  const state = await aiRequest('/api/view/state');
+                  currentViewState = state;
+                  f3Panel.textContent = formatF3(state);
+                  lastStateAt = Date.now();
+                }
+              } catch (error) {
+                viewStatus.innerText = error.message;
+                delay = 2000;
+              } finally {
+                frameBusy = false;
+              }
+            }
+            viewTimer = setTimeout(refreshView, delay);
+          }
+          function toggleF3() {
+            f3Panel.hidden = !f3Panel.hidden;
+            f3Button.innerText = f3Panel.hidden ? 'Show F3 telemetry' : 'Hide F3 telemetry';
+          }
+          f3Button.addEventListener('click', toggleF3);
+          dashboardTokenInput.addEventListener('input', () => {
+            if (viewTimer) clearTimeout(viewTimer);
+            refreshView();
+          });
+          viewFrame.addEventListener('contextmenu', event => event.preventDefault());
+          viewFrame.addEventListener('pointerdown', event => {
+            if (!dashboardTokenInput.value || !currentViewState || (event.button !== 0 && event.button !== 2)) return;
+            event.preventDefault();
+            viewFrame.setPointerCapture(event.pointerId);
+            viewDrag = {
+              pointerId: event.pointerId, button: event.button,
+              x: event.clientX, y: event.clientY,
+              yaw: Number(currentViewState.yawRadians) || 0,
+              pitch: Number(currentViewState.pitchRadians) || 0,
+              moved: false
+            };
+          });
+          viewFrame.addEventListener('pointermove', event => {
+            if (!viewDrag || viewDrag.pointerId !== event.pointerId) return;
+            const dx = event.clientX - viewDrag.x;
+            const dy = event.clientY - viewDrag.y;
+            if (Math.abs(dx) + Math.abs(dy) < 5) return;
+            viewDrag.moved = true;
+            if (Date.now() - lastAimAt < 45) return;
+            lastAimAt = Date.now();
+            void performAction('look', {
+              yaw: viewDrag.yaw - dx * 0.006,
+              pitch: Math.max(-1.55, Math.min(1.55, viewDrag.pitch + dy * 0.006))
+            });
+          });
+          viewFrame.addEventListener('pointerup', event => {
+            if (!viewDrag || viewDrag.pointerId !== event.pointerId) return;
+            const drag = viewDrag;
+            viewDrag = null;
+            if (!drag.moved) void performAction(drag.button === 2 ? 'use' : 'attack');
+          });
+          viewFrame.addEventListener('pointercancel', () => { viewDrag = null; });
+          viewFrame.addEventListener('wheel', event => {
+            if (!dashboardTokenInput.value) return;
+            event.preventDefault();
+            const current = Number(currentViewState?.quickBarSlot) || 0;
+            const next = (current + (event.deltaY > 0 ? 1 : 8)) % 9;
+            void performAction('slot', { slot: next });
+          }, { passive: false });
+          refreshView();
           let controlQueue = Promise.resolve();
           function setControl(input, pressed) {
             if (pressed && activeControls.has(input)) return;
@@ -483,7 +606,7 @@ app.get('/', (req, res) => {
           const actionButtons = [...document.querySelectorAll('[data-action]')];
           const slotButtons = [...document.querySelectorAll('[data-slot]')];
           const aimButtons = [...document.querySelectorAll('[data-aim]')];
-          const allInteractiveButtons = [...controlButtons, ...actionButtons, ...slotButtons, ...aimButtons];
+          const allInteractiveButtons = [...controlButtons, ...actionButtons, ...slotButtons, ...aimButtons, f3Button];
 
           async function performAction(action, payload = {}) {
             if (!dashboardTokenInput.value) {
@@ -537,6 +660,11 @@ app.get('/', (req, res) => {
 
           document.addEventListener('keydown', event => {
             if (event.target.matches('input, textarea, select, [contenteditable="true"]')) return;
+            if (event.key === 'F3') {
+              event.preventDefault();
+              toggleF3();
+              return;
+            }
             const key = event.key.toLowerCase();
             if (key === 'q') {
               event.preventDefault();
@@ -955,6 +1083,79 @@ app.get('/api/radar', (req, res) => {
     },
     entities
   });
+});
+
+function getLocalViewerUrl(endpoint) {
+  const raw = process.env.VIEWER_URL || config.view?.viewerUrl || 'http://127.0.0.1:8080';
+  const url = new URL(raw);
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    throw new Error('Viewer proxy only accepts an HTTP viewer bound to localhost.');
+  }
+  url.pathname = endpoint;
+  url.search = '';
+  return url;
+}
+
+app.get('/api/view/frame', async (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503).json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  if (!viewFrameServer || !botState.connected) {
+    return res.status(503).json({ error: 'Live POV is disabled or the Minecraft bot is disconnected.' });
+  }
+  try {
+    const response = await fetch(getLocalViewerUrl('/frame'), { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+    if (!response.ok) return res.status(503).json({ error: `Local POV renderer returned HTTP ${response.status}.` });
+    const image = Buffer.from(await response.arrayBuffer());
+    if (!image.length || image.length > 5 * 1024 * 1024) {
+      return res.status(502).json({ error: 'POV renderer returned an empty or oversized frame.' });
+    }
+    res.set('Cache-Control', 'no-store').type('image/bmp').send(image);
+  } catch (error) {
+    res.status(503).json({ error: `POV renderer unavailable: ${error.message}` });
+  }
+});
+
+app.get('/api/view/state', async (req, res) => {
+  if (!hasDashboardAccess(req)) {
+    return res.status(process.env.DASHBOARD_TOKEN ? 401 : 503).json({ error: 'A valid DASHBOARD_TOKEN is required.' });
+  }
+  if (!viewFrameServer || !botState.connected || !bot?.entity?.position) {
+    return res.status(503).json({ error: 'Live POV is disabled or the Minecraft bot is disconnected.' });
+  }
+  try {
+    const response = await fetch(getLocalViewerUrl('/state'), { signal: AbortSignal.timeout(3000), cache: 'no-store' });
+    if (!response.ok) throw new Error(`Local renderer returned HTTP ${response.status}.`);
+    const renderer = await response.json();
+    const pos = bot.entity.position;
+    const block = bot.blockAt?.({ x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) });
+    const yaw = Number(bot.entity.yaw) || 0;
+    const directionNames = ['South', 'West', 'North', 'East'];
+    const directionIndex = ((Math.round(yaw / (Math.PI / 2)) % 4) + 4) % 4;
+    res.json({
+      ...renderer,
+      connected: true,
+      position: { x: pos.x, y: pos.y, z: pos.z },
+      yawRadians: yaw,
+      pitchRadians: Number(bot.entity.pitch) || 0,
+      yawDegrees: yaw * 180 / Math.PI,
+      pitchDegrees: (Number(bot.entity.pitch) || 0) * 180 / Math.PI,
+      facing: directionNames[directionIndex],
+      dimension: bot.game?.dimension || 'unknown',
+      timeOfDay: Number.isFinite(bot.time?.timeOfDay) ? Math.floor(bot.time.timeOfDay) : null,
+      day: Number.isFinite(bot.time?.day) ? bot.time.day : null,
+      health: Number.isFinite(bot.health) ? bot.health : null,
+      food: Number.isFinite(bot.food) ? bot.food : null,
+      heldItem: bot.heldItem?.name || null,
+      quickBarSlot: Number.isInteger(bot.quickBarSlot) ? bot.quickBarSlot : 0,
+      block: block?.name || null,
+      blockLight: Number.isFinite(block?.light) ? block.light : null,
+      skyLight: Number.isFinite(block?.skyLight) ? block.skyLight : null,
+      biome: block?.biome?.name || null
+    });
+  } catch (error) {
+    res.status(503).json({ error: `POV telemetry unavailable: ${error.message}` });
+  }
 });
 
 app.post('/api/discord/chat', (req, res) => {

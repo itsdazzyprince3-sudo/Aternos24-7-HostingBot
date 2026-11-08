@@ -17,11 +17,14 @@ g++ -O2 -std=c++17 -pthread bot_view.cpp -o bot_view
    BOT_VIEW=1 npm start
    ```
    (or add `"view": { "enabled": true }` to settings.json)
-2. In another terminal, run the viewer:
+2. In another terminal on the same machine, run the viewer (HTTP binds to
+   `127.0.0.1` by default):
    ```
    ./cpp/bot_view --frame-port 31337 --http-port 8080 --w 480 --h 270
    ```
-3. Open `http://127.0.0.1:8080/` - you see the bot's first-person view, live.
+3. Open `http://127.0.0.1:8080/` for the local reconstructed view, or enter
+   `DASHBOARD_TOKEN` in the bot dashboard to view it through the authenticated
+   `/api/view/*` proxy.
 
 ## Run without the bot (test mode)
 ```
@@ -30,10 +33,11 @@ g++ -O2 -std=c++17 -pthread bot_view.cpp -o bot_view
 Renders a built-in synthetic world so you can confirm the viewer works.
 
 ## What it shows
-- Voxel blocks the bot has loaded, colored and face-shaded (top/side/bottom
-  brightness like Minecraft), with distance fog.
+- Voxel blocks the bot has loaded, colored and face-shaded, with approximate
+  shading from server-provided block/sky light values and distance fog.
 - Nearby entities (mobs = red, players = green, other = yellow) as billboards.
-- Live FPS / eye / yaw / grid readout at `/state`.
+- Live software-renderer FPS / eye coordinates / yaw / pitch / grid readout at
+  `/state` (JSON), plus F3-style data in the authenticated dashboard.
 
 ## Options
 | flag | default | meaning |
@@ -42,15 +46,19 @@ Renders a built-in synthetic world so you can confirm the viewer works.
 | `--frame-host` | 127.0.0.1 | Node frame-server host |
 | `--frame-port` | 31337 | Node frame-server port |
 | `--http-port` | 8080 | HTTP viewer port |
+| `--http-host` | 127.0.0.1 | HTTP bind IPv4 address; public binding is unauthenticated and discouraged |
 | `--w` / `--h` | 480 / 270 | render resolution |
 
 Env overrides for the bot side: `VIEW_FRAME_PORT`, `VIEW_W`, `VIEW_H`,
 `VIEW_D`, `VIEW_FPS`.
 
 ## Honest limits
-- This is reconstructed from world data, not a real game render: no entity 3D
-  models (entities are colored billboards), no particles/animations, no skybox.
+- This is reconstructed from world data, not a real game screenshot: no Minecraft
+  textures, entity 3D models (entities are colored billboards), particles,
+  animations, full sky/weather, GUI, or client-side gamma.
+- The reported FPS is the software renderer's rate, not a Minecraft Java client
+  FPS. Lighting uses the data Mineflayer has for loaded blocks and is approximate.
 - Only blocks in the bot's loaded area are visible (region default 64x48x64).
 - yaw/pitch convention may need a sign flip if the view is mirrored for your
-  protocol build (flip the `fwd` vector in `renderFrame()`).
+  protocol build (set `VIEW_YAW_SIGN` or `VIEW_PITCH_SIGN`).
 - Heavy CPU: ~480x270 software raycasting at ~9-12 fps. That's the tradeoff.
