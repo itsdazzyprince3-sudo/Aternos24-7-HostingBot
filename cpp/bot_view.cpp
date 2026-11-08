@@ -37,6 +37,10 @@
 #define STBI_NO_STDIO
 #include "stb_image_write.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#include "stb_image.h"
+
 // ---- config ----
 static int RES_W = 320, RES_H = 180;
 static int RENDER_FPS = 60;
@@ -78,6 +82,56 @@ struct World {
   std::vector<uint8_t> grid;
   bool valid() const { return W>0 && H>0 && D>0 && grid.size()==(size_t)W*H*D; }
 };
+
+// ---- texture assets (built from the local client jar by scripts/build-mc-assets.py) ----
+struct Tex { int w=0,h=0; std::vector<uint8_t> px; bool ok() const { return w>0&&h>0&&!px.empty(); } };
+static std::string g_asset_dir = "data/mc";
+static Tex g_atlas, g_ent[4]; // 1=mob, 2=player, 3=other
+static bool g_tex_on=false;
+
+static bool loadPng(const std::string& path, Tex& t) {
+  FILE* f=fopen(path.c_str(),"rb");
+  if(!f) return false;
+  fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
+  if(n<=0){ fclose(f); return false; }
+  std::vector<uint8_t> buf((size_t)n);
+  bool got = fread(buf.data(),1,(size_t)n,f)==(size_t)n;
+  fclose(f);
+  if(!got) return false;
+  int w=0,h=0,c=0;
+  stbi_uc* p=stbi_load_from_memory(buf.data(),(int)buf.size(),&w,&h,&c,4);
+  if(!p) return false;
+  t.w=w; t.h=h; t.px.assign(p, p + (size_t)w*(size_t)h*4);
+  stbi_image_free(p);
+  return true;
+}
+static void loadAssets() {
+  if (loadPng(g_asset_dir+"/atlas.png", g_atlas)) g_tex_on = true;
+  loadPng(g_asset_dir+"/ent_zombie.png", g_ent[1]);
+  loadPng(g_asset_dir+"/ent_player.png", g_ent[2]);
+  loadPng(g_asset_dir+"/ent_other.png", g_ent[3]);
+  printf("[View] assets %s: atlas=%dx%d ents=%d/%d/%d\n", g_tex_on?"on":"palette",
+         g_atlas.w,g_atlas.h, g_ent[1].ok()?1:0, g_ent[2].ok()?1:0, g_ent[3].ok()?1:0);
+  fflush(stdout);
+}
+
+// daytime sky: horizon pale, zenith blue (approximates MC clear-weather sky)
+static inline void skyColor(float ny, uint8_t out[3]) {
+  const float horizon[3]={198,224,255}, zenith[3]={112,158,255};
+  float e = ny>0 ? powf(ny,0.55f) : 0.0f;
+  for (int i=0;i<3;i++) out[i]=(uint8_t)(horizon[i] + (zenith[i]-horizon[i])*e);
+}
+static inline bool isSkyPixel(const uint8_t* p) {
+  return (int)p[2] > (int)p[0]+14 && p[2] > 150;
+}
+static inline void sampleAtlas(int tile, int u, int v, uint8_t out[4]) {
+  if (tile<0) { out[0]=out[1]=out[2]=0; out[3]=0; return; }
+  int cols=g_atlas.w/16;
+  int x=(tile%cols)*16 + (u<0?0:(u>15?15:u));
+  int y=(tile/cols)*16 + (v<0?0:(v>15?15:v));
+  const uint8_t* p=&g_atlas.px[((size_t)y*(size_t)g_atlas.w + (size_t)x)*4];
+  out[0]=p[0]; out[1]=p[1]; out[2]=p[2]; out[3]=p[3];
+}
 struct Pose {
   float eye[3] = {0, 0, 0};
   float yaw = 0, pitch = 0;
@@ -225,17 +279,45 @@ static void renderBand(const World& w, const Pose& pose, std::vector<uint8_t>& f
         if (ix<0 || ix>=w.W || iy<0 || iy>=w.H || iz<0 || iz>=w.D) break;
         if (kindAt(w, ix, iy, iz) != 0) hit = true;
       }
-      uint8_t r = SKY[0], g = SKY[1], b = SKY[2];
+      uint8_t sky[3]; skyColor(ny, sky);
+      float r = (float)sky[0], g = (float)sky[1], b = (float)sky[2];
       if (hit) {
         uint8_t k = kindAt(w, ix, iy, iz);
-        const uint8_t* base = PAL[k < 16 ? k : 15];
-        float shade = (lastAxis==1) ? (stepY>0?0.5f:1.0f) : (lastAxis==0?0.8f:0.6f);
-        r = (uint8_t)(base[0]*shade);
-        g = (uint8_t)(base[1]*shade);
-        b = (uint8_t)(base[2]*shade);
+        float shade = (lastAxis==1) ? (stepY>0?0.5f:1.0f) : (lastAxis==0?0.62f:0.82f);
+        if (g_tex_on) {
+          int face = (lastAxis==1) ? ((stepY>0)?2:0) : 1;
+          int tile = ((int)k-1)*3 + face;
+          float hx = e[0]+dir[0]*t, hy = e[1]+dir[1]*t, hz = e[2]+dir[2]*t;
+          float fu, fv;
+          if (lastAxis==0)      { fu = hz-floorf(hz); fv = 1.0f-(hy-floorf(hy)); }
+          else if (lastAxis==1) { fu = hx-floorf(hx); fv = hz-floorf(hz); }
+          else                  { fu = hx-floorf(hx); fv = 1.0f-(hy-floorf(hy)); }
+          uint8_t tx[4];
+          sampleAtlas(tile, (int)(fu*16.0f), (int)(fv*16.0f), tx);
+          float a = tx[3]/255.0f;
+          r = r*(1.0f-a) + (float)tx[0]*shade*a;
+          g = g*(1.0f-a) + (float)tx[1]*shade*a;
+          b = b*(1.0f-a) + (float)tx[2]*shade*a;
+        } else {
+          const uint8_t* base = PAL[k < 16 ? k : 15];
+          r = (float)base[0]*shade;
+          g = (float)base[1]*shade;
+          b = (float)base[2]*shade;
+        }
+        float dist = t*sqrtf(dirLen2);
+        float fog = (dist-24.0f)/23.0f;
+        fog = fog<0?0:(fog>1?1:fog);
+        if (fog>0) {
+          r += ((float)sky[0]-r)*fog;
+          g += ((float)sky[1]-g)*fog;
+          b += ((float)sky[2]-b)*fog;
+        }
       }
+      uint8_t rr=(uint8_t)(r<0?0:(r>255?255:r));
+      uint8_t gg=(uint8_t)(g<0?0:(g>255?255:g));
+      uint8_t bb=(uint8_t)(b<0?0:(b>255?255:b));
       size_t off = ((size_t)py*(size_t)W + (size_t)px)*3;
-      fb[off] = r; fb[off+1] = g; fb[off+2] = b;
+      fb[off] = rr; fb[off+1] = gg; fb[off+2] = bb;
 
       float colT = hit ? t : MAX_DIST;
       if (py >= cy0 && py < cy1 && colT < colmin[px]) colmin[px] = colT;
@@ -442,32 +524,82 @@ static void drawEntities(uint8_t* fb, int W, int H, const Pose& pose, const floa
   float fwd[3], right[3], up[3];
   cameraBasis(pose.yaw, pose.pitch, fwd, right, up);
   float focal = ((float)W*0.5f)/tanf(FOV*0.5f);
+  std::vector<std::pair<float,const Ent*>> order;
+  order.reserve(pose.ents.size());
   for (const Ent& en : pose.ents) {
     float fd = vdot(en.rel, fwd);
     if (fd <= 0.3f) continue;
+    float dist = sqrtf(en.rel[0]*en.rel[0]+en.rel[1]*en.rel[1]+en.rel[2]*en.rel[2]);
+    order.push_back({dist,&en});
+  }
+  std::sort(order.begin(), order.end(),
+            [](const std::pair<float,const Ent*>& a, const std::pair<float,const Ent*>& b){
+              return a.first > b.first; });
+  uint8_t fogc[3]; skyColor(0.0f, fogc);
+  for (auto& [dist, enp] : order) {
+    const Ent& en = *enp;
+    float fd = vdot(en.rel, fwd);
     float rd = vdot(en.rel, right);
     float ud = vdot(en.rel, up);
     int sx = (int)((float)W*0.5f + rd/fd*focal);
     if (sx < 0 || sx >= W) continue;
-    float dist = sqrtf(en.rel[0]*en.rel[0]+en.rel[1]*en.rel[1]+en.rel[2]*en.rel[2]);
     // occluded by the nearest block the center column already hit
     if (colmin && dist > colmin[sx]*1.35f + 0.6f) continue;
     float height = (en.kind==3) ? 0.9f : 1.8f;
-    float widthB = (en.kind==3) ? 0.4f : 0.6f;
     int syFeet = (int)((float)H*0.5f - ud/fd*focal);
     int syHead = (int)((float)H*0.5f - (ud+height)/fd*focal);
-    int halfW = (int)std::max(1.0f, focal*widthB*0.5f/fd);
+    int yTop = std::min(syHead,syFeet), yBot = std::max(syHead,syFeet);
+    int hp = std::max(1, yBot-yTop+1);
+    int wp = std::max(1, hp/2);
+    int x0 = sx - wp/2;
+    const Tex* t = (en.kind==1) ? &g_ent[1] : (en.kind==2 ? &g_ent[2] : &g_ent[3]);
+    bool have = t->ok();
     uint8_t ec[3];
     if (en.kind==2) { ec[0]=60; ec[1]=220; ec[2]=80; }
     else if (en.kind==1) { ec[0]=220; ec[1]=60; ec[2]=60; }
     else { ec[0]=230; ec[1]=200; ec[2]=60; }
-    if (syHead > syFeet) std::swap(syHead, syFeet);
-    for (int yy=syHead; yy<=syFeet; ++yy)
-      for (int xx=sx-halfW; xx<=sx+halfW; ++xx) {
-        if (xx<0||yy<0||xx>=W||yy>=H) continue;
+    float fog = (dist-28.0f)/20.0f;
+    fog = fog<0?0:(fog>1?1:fog);
+    for (int yy=yTop; yy<=yBot; ++yy) {
+      if (yy<0||yy>=H) continue;
+      int v = (int)((float)(yy-yTop)/(float)hp*32.0f);
+      if (v>31) v=31;
+      for (int xx=x0; xx<x0+wp; ++xx) {
+        if (xx<0||xx>=W) continue;
+        uint8_t cr,cg,cb;
+        if (have) {
+          int u = (int)((float)(xx-x0)/(float)wp*16.0f);
+          if (u>15) u=15;
+          const uint8_t* p=&t->px[((size_t)v*(size_t)t->w + (size_t)u)*4];
+          if (p[3] < 96) continue;
+          cr=p[0]; cg=p[1]; cb=p[2];
+        } else {
+          cr=ec[0]; cg=ec[1]; cb=ec[2];
+        }
         size_t off=((size_t)yy*(size_t)W+(size_t)xx)*3;
-        fb[off]=ec[0]; fb[off+1]=ec[1]; fb[off+2]=ec[2];
+        fb[off]  =(uint8_t)(cr + ((int)fogc[0]-cr)*fog);
+        fb[off+1]=(uint8_t)(cg + ((int)fogc[1]-cg)*fog);
+        fb[off+2]=(uint8_t)(cb + ((int)fogc[2]-cb)*fog);
       }
+    }
+  }
+}
+
+// ---- crosshair ----
+static void drawCrosshair(uint8_t* fb, int W, int H) {
+  int cx=W/2, cy=H/2;
+  for (int d=-3; d<=3; ++d) {
+    int px=cx+d, py=cy;
+    if (px>=0&&px<W) { size_t o=((size_t)py*(size_t)W+(size_t)px)*3; fb[o]=20; fb[o+1]=20; fb[o+2]=20; }
+    px=cx; py=cy+d;
+    if (py>=0&&py<H) { size_t o=((size_t)py*(size_t)W+(size_t)px)*3; fb[o]=20; fb[o+1]=20; fb[o+2]=20; }
+  }
+  for (int d=-2; d<=2; ++d) {
+    if (d==0) continue;
+    int px=cx+d, py=cy;
+    size_t o=((size_t)py*(size_t)W+(size_t)px)*3; fb[o]=240; fb[o+1]=240; fb[o+2]=240;
+    px=cx; py=cy+d;
+    o=((size_t)py*(size_t)W+(size_t)px)*3; fb[o]=240; fb[o+1]=240; fb[o+2]=240;
   }
 }
 
@@ -521,11 +653,11 @@ static void computePerception(const RayStats& st, const Pose& pose, int W, int H
     const uint8_t* d = fb->data();
     for (int y=H*2/3;y<H;y+=2) for (int x=0;x<W;x+=2) {
       const uint8_t* px=&d[((size_t)y*W+x)*3]; lowerN++;
-      if (!(px[0]==SKY[0]&&px[1]==SKY[1]&&px[2]==SKY[2])) lowerHit++;
+      if (!isSkyPixel(px)) lowerHit++;
     }
     for (int y=0;y<H/3;y+=2) for (int x=0;x<W;x+=2) {
       const uint8_t* px=&d[((size_t)y*W+x)*3]; skyN++;
-      if (px[0]==SKY[0]&&px[1]==SKY[1]&&px[2]==SKY[2]) skyHit++;
+      if (isSkyPixel(px)) skyHit++;
     }
     p.ground_pct=(uint8_t)(lowerN?(lowerHit*100/lowerN):0);
     p.sky_pct=(uint8_t)(skyN?(skyHit*100/skyN):0);
@@ -594,6 +726,7 @@ static void renderer() {
       for (auto& th : pool) th.join();
     }
     drawEntities(fb.data(), W, H, pose, stats.col_min);
+    drawCrosshair(fb.data(), W, H);
     // swap framebuffer
     { std::lock_guard<std::mutex> lk(g_fb_mtx); g_fb_a.swap(fb); g_ready=&g_fb_a; }
     frames++;
@@ -758,10 +891,12 @@ static int selftest() {
     pool[t]=std::thread([&,y0,y1]{ renderBand(w,p,fb,W,H,y0,y1,st.col_min); }); }
   for (auto& th:pool) th.join();
   drawEntities(fb.data(),W,H,p,nullptr);
+  drawCrosshair(fb.data(),W,H);
   int distinct=0, first=fb.empty()?-1:fb[0], sky=0, solid=0;
   for (size_t i=0;i<fb.size();i+=3){
     if (fb[i]!=first) distinct++;
-    if (fb[i]==SKY[0]&&fb[i+1]==SKY[1]&&fb[i+2]==SKY[2]) sky++; else solid++;
+    uint8_t px[3]={fb[i],fb[i+1],fb[i+2]};
+    if (isSkyPixel(px)) sky++; else solid++;
   }
   int mid=W/2;
   printf("selftest: %dx%d pixels=%zu solid=%d sky=%d distinct_start=%d center_col_min=%.2f\n",
@@ -790,6 +925,7 @@ int main(int argc,char**argv){
     else if (a=="--yaw-sign"&&i+1<argc) YAW_SIGN=(float)atof(argv[++i]);
     else if (a=="--pitch-sign"&&i+1<argc) PITCH_SIGN=(float)atof(argv[++i]);
     else if (a=="--bench"&&i+1<argc) { doBench=true; benchSec=atof(argv[++i]); }
+    else if (a=="--assets"&&i+1<argc) g_asset_dir=argv[++i];
     else if (a=="--selftest") doSelf=true;
   }
   if (const char* e=getenv("VIEW_YAW_SIGN")) YAW_SIGN=(float)atof(e);
@@ -800,6 +936,7 @@ int main(int argc,char**argv){
   if (STREAM_FPS<0) STREAM_FPS=30;
   if (JPEG_QUALITY<1) JPEG_QUALITY=70;
   if (MAX_DIST<8) MAX_DIST=48;
+  loadAssets();
 
   if (doSelf) return selftest();
   if (doBench) { bench(benchSec); return 0; }
