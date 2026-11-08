@@ -438,7 +438,7 @@ static void frameClient() {
 }
 
 // ---- entity billboards ----
-static void drawEntities(uint8_t* fb, int W, int H, const Pose& pose) {
+static void drawEntities(uint8_t* fb, int W, int H, const Pose& pose, const float* colmin) {
   float fwd[3], right[3], up[3];
   cameraBasis(pose.yaw, pose.pitch, fwd, right, up);
   float focal = ((float)W*0.5f)/tanf(FOV*0.5f);
@@ -448,14 +448,22 @@ static void drawEntities(uint8_t* fb, int W, int H, const Pose& pose) {
     float rd = vdot(en.rel, right);
     float ud = vdot(en.rel, up);
     int sx = (int)((float)W*0.5f + rd/fd*focal);
-    int sy = (int)((float)H*0.5f - ud/fd*focal);
-    int half = (int)std::max(2.0f, focal*0.12f/fd);
+    if (sx < 0 || sx >= W) continue;
+    float dist = sqrtf(en.rel[0]*en.rel[0]+en.rel[1]*en.rel[1]+en.rel[2]*en.rel[2]);
+    // occluded by the nearest block the center column already hit
+    if (colmin && dist > colmin[sx]*1.35f + 0.6f) continue;
+    float height = (en.kind==3) ? 0.9f : 1.8f;
+    float widthB = (en.kind==3) ? 0.4f : 0.6f;
+    int syFeet = (int)((float)H*0.5f - ud/fd*focal);
+    int syHead = (int)((float)H*0.5f - (ud+height)/fd*focal);
+    int halfW = (int)std::max(1.0f, focal*widthB*0.5f/fd);
     uint8_t ec[3];
     if (en.kind==2) { ec[0]=60; ec[1]=220; ec[2]=80; }
     else if (en.kind==1) { ec[0]=220; ec[1]=60; ec[2]=60; }
     else { ec[0]=230; ec[1]=200; ec[2]=60; }
-    for (int yy=sy-half; yy<=sy+half; ++yy)
-      for (int xx=sx-half; xx<=sx+half; ++xx) {
+    if (syHead > syFeet) std::swap(syHead, syFeet);
+    for (int yy=syHead; yy<=syFeet; ++yy)
+      for (int xx=sx-halfW; xx<=sx+halfW; ++xx) {
         if (xx<0||yy<0||xx>=W||yy>=H) continue;
         size_t off=((size_t)yy*(size_t)W+(size_t)xx)*3;
         fb[off]=ec[0]; fb[off+1]=ec[1]; fb[off+2]=ec[2];
@@ -474,7 +482,7 @@ static void perceiveEntities(const Pose& pose, int W, int H, Perc& p) {
     float fd = vdot(en.rel, fwd);
     if (fd <= 0.5f) continue;
     float rd = vdot(en.rel, right);
-    float ud = vdot(en.rel, up);
+    float ud = vdot(en.rel, up) + 0.9f; // aim at body centre, not feet
     int sx = (int)((float)W*0.5f + rd/fd*focal);
     int sy = (int)((float)H*0.5f - ud/fd*focal);
     if (sx<0||sy<0||sx>=W||sy>=H) continue;
@@ -585,7 +593,7 @@ static void renderer() {
       for (int t=0;t<hw;++t) pool[t]=std::thread(worker);
       for (auto& th : pool) th.join();
     }
-    drawEntities(fb.data(), W, H, pose);
+    drawEntities(fb.data(), W, H, pose, stats.col_min);
     // swap framebuffer
     { std::lock_guard<std::mutex> lk(g_fb_mtx); g_fb_a.swap(fb); g_ready=&g_fb_a; }
     frames++;
@@ -671,11 +679,14 @@ static void httpServer() {
       if (!strcmp(path,"/") || !strncmp(path,"/?",2)) {
         const char* html =
           "<!doctype html><html><head><meta charset=utf8><title>Bot View</title>"
-          "<style>body{margin:0;background:#0b0d10;color:#e8e8e8;font:12px ui-monospace,monospace}"
-          "#v{width:100%;height:100vh;object-fit:contain;image-rendering:pixelated;background:#000;display:block}"
-          "#s{position:fixed;top:6px;left:8px;text-shadow:0 0 4px #000}</style></head>"
-          "<body><img id=v src=/stream><div id=s></div>"
-          "<script>const s=document.getElementById('s');"
+          "<style>html,body{margin:0;height:100%;background:#000;color:#e8e8e8;font:12px ui-monospace,monospace;overflow:hidden}"
+          "#v{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;background:#000;display:block}"
+          "#s{position:fixed;top:6px;left:8px;text-shadow:0 0 4px #000;white-space:pre;pointer-events:none}"
+          "#f{position:fixed;right:8px;top:6px;background:#000a;color:#ddd;border:1px solid #444;padding:4px 8px;font:inherit;cursor:pointer}</style></head>"
+          "<body><img id=v src=/stream><div id=s></div><button id=f>fullscreen</button>"
+          "<script>const v=document.getElementById('v'),s=document.getElementById('s'),f=document.getElementById('f');"
+          "function full(){if(!document.fullscreenElement){document.documentElement.requestFullscreen().catch(()=>{});}else{document.exitFullscreen();}}"
+          "f.onclick=full;addEventListener('keydown',e=>{if(e.key==='f'||e.key==='F')full();});"
           "setInterval(()=>{fetch('/state').then(r=>r.text()).then(t=>s.textContent=t).catch(()=>{});},1000);"
           "</script></body></html>";
         httpReply(c,200,"text/html; charset=utf8",(const uint8_t*)html,strlen(html));
@@ -696,10 +707,10 @@ static void httpServer() {
         Pose pose; { std::lock_guard<std::mutex> lk(g_pose_mtx); pose=g_render_pose; }
         char js[512];
         int n=snprintf(js,sizeof(js),
-          "fps=%d cells=%lld eye=%.1f,%.1f,%.1f yaw=%.2f pitch=%.2f\n"
+          "fps=%d cells=%lld ents=%zu eye=%.1f,%.1f,%.1f yaw=%.2f pitch=%.2f\n"
           "free c/l/r=%d/%d/%d ground=%d sky=%d fwd_clear=%.1f nearest=%.1f target=%d@(%d,%d) dist=%d\n"
           "packet_age_ms=%lld",
-          g_fps.load(), g_cells.load(), pose.eye[0],pose.eye[1],pose.eye[2],pose.yaw,pose.pitch,
+          g_fps.load(), g_cells.load(), pose.ents.size(), pose.eye[0],pose.eye[1],pose.eye[2],pose.yaw,pose.pitch,
           p.free_center,p.free_left,p.free_right,p.ground_pct,p.sky_pct,p.forward_clear,p.nearest,
           p.target_kind,p.target_sx,p.target_sy,p.target_dist,
           g_last_packet_ms.load()? now_ms()-g_last_packet_ms.load():-1);
@@ -746,7 +757,7 @@ static int selftest() {
   for (int t=0;t<hw;++t){ int y0=H*t/hw,y1=H*(t+1)/hw;
     pool[t]=std::thread([&,y0,y1]{ renderBand(w,p,fb,W,H,y0,y1,st.col_min); }); }
   for (auto& th:pool) th.join();
-  drawEntities(fb.data(),W,H,p);
+  drawEntities(fb.data(),W,H,p,nullptr);
   int distinct=0, first=fb.empty()?-1:fb[0], sky=0, solid=0;
   for (size_t i=0;i<fb.size();i+=3){
     if (fb[i]!=first) distinct++;
