@@ -105,6 +105,12 @@ static int g_fbW = 0, g_fbH = 0;
 static std::mutex g_jpeg_mtx;
 static std::vector<uint8_t> g_jpeg;
 static std::atomic<uint32_t> g_jpeg_seq{0};
+static std::atomic<int> g_stream_clients{0};
+static std::mutex g_enc_mtx;
+static std::condition_variable g_enc_cv;
+static std::vector<uint8_t> g_enc_in;
+static bool g_enc_pending=false;
+static int g_enc_w=320, g_enc_h=180, g_enc_q=70;
 static std::atomic<long long> g_jpeg_ms{0};
 
 // ---- perception summary sent back to Node ----
@@ -179,7 +185,7 @@ struct RayStats {
 
 // ---- raycaster: render rows [y0,y1) ----
 static void renderBand(const World& w, const Pose& pose, std::vector<uint8_t>& fb,
-                       int W, int H, int y0, int y1, RayStats& st) {
+                       int W, int H, int y0, int y1, float* colmin) {
   float fwd[3], right[3], up[3];
   cameraBasis(pose.yaw, pose.pitch, fwd, right, up);
   float e[3] = { pose.eye[0]-w.ox, pose.eye[1]-w.oy, pose.eye[2]-w.oz };
@@ -194,7 +200,7 @@ static void renderBand(const World& w, const Pose& pose, std::vector<uint8_t>& f
       float nx = 2.0f*((float)px+0.5f)/(float)W - 1.0f;
       float dir[3];
       for (int k=0;k<3;k++) dir[k] = fwd[k] + right[k]*nx*tanHalf*aspect + up[k]*ny*tanHalf;
-      vnorm(dir);
+      const float dirLen2 = dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2];
 
       int ix=(int)floorf(e[0]), iy=(int)floorf(e[1]), iz=(int)floorf(e[2]);
       int stepX = dir[0]>0?1:(dir[0]<0?-1:1);
@@ -211,11 +217,12 @@ static void renderBand(const World& w, const Pose& pose, std::vector<uint8_t>& f
       float t = 0.0f;
       bool hit = false;
       if (kindAt(w, ix, iy, iz) != 0) { hit = true; lastAxis = 1; }
-      for (int step = 0; step < 256 && !hit; ++step) {
+      for (int step = 0; step < 192 && !hit; ++step) {
         if (tMaxX < tMaxY && tMaxX < tMaxZ) { ix += stepX; t = tMaxX; tMaxX += tDX; lastAxis = 0; }
         else if (tMaxY < tMaxZ)            { iy += stepY; t = tMaxY; tMaxY += tDY; lastAxis = 1; }
         else                                { iz += stepZ; t = tMaxZ; tMaxZ += tDZ; lastAxis = 2; }
-        if (t > MAX_DIST) break;
+        if (t*t > 2304.0f*dirLen2) break;
+        if (ix<0 || ix>=w.W || iy<0 || iy>=w.H || iz<0 || iz>=w.D) break;
         if (kindAt(w, ix, iy, iz) != 0) hit = true;
       }
       uint8_t r = SKY[0], g = SKY[1], b = SKY[2];
@@ -223,17 +230,15 @@ static void renderBand(const World& w, const Pose& pose, std::vector<uint8_t>& f
         uint8_t k = kindAt(w, ix, iy, iz);
         const uint8_t* base = PAL[k < 16 ? k : 15];
         float shade = (lastAxis==1) ? (stepY>0?0.5f:1.0f) : (lastAxis==0?0.8f:0.6f);
-        float fog = 1.0f - std::min(1.0f, t/MAX_DIST);
-        fog = fog*0.85f + 0.15f;
-        r = (uint8_t)(base[0]*shade*fog + SKY[0]*(1.0f-fog));
-        g = (uint8_t)(base[1]*shade*fog + SKY[1]*(1.0f-fog));
-        b = (uint8_t)(base[2]*shade*fog + SKY[2]*(1.0f-fog));
+        r = (uint8_t)(base[0]*shade);
+        g = (uint8_t)(base[1]*shade);
+        b = (uint8_t)(base[2]*shade);
       }
       size_t off = ((size_t)py*(size_t)W + (size_t)px)*3;
       fb[off] = r; fb[off+1] = g; fb[off+2] = b;
 
       float colT = hit ? t : MAX_DIST;
-      if (py >= cy0 && py < cy1 && colT < st.col_min[px]) st.col_min[px] = colT;
+      if (py >= cy0 && py < cy1 && colT < colmin[px]) colmin[px] = colT;
     }
   }
 }
@@ -297,6 +302,19 @@ static std::vector<uint8_t> encodeJpeg(const std::vector<uint8_t>& rgb, int W, i
   stbi_write_jpg_to_func(jpegWrite, &sink, W, H, 3, rgb.data(), q);
   return out;
 }
+static void encoderLoop() {
+  for (;;) {
+    std::vector<uint8_t> buf; int W,H,Q;
+    {
+      std::unique_lock<std::mutex> lk(g_enc_mtx);
+      g_enc_cv.wait(lk, []{ return g_enc_pending; });
+      buf.swap(g_enc_in); W=g_enc_w; H=g_enc_h; Q=g_enc_q; g_enc_pending=false;
+    }
+    std::vector<uint8_t> j=encodeJpeg(buf,W,H,Q);
+    std::lock_guard<std::mutex> lk(g_jpeg_mtx); g_jpeg.swap(j); g_jpeg_seq.fetch_add(1);
+  }
+}
+
 static std::vector<uint8_t> encodeBmp(const std::vector<uint8_t>& rgb, int W, int H) {
   int rowSize = (W*3 + 3) & ~3;
   int pad = rowSize - W*3;
@@ -522,6 +540,7 @@ static void renderer() {
   RayStats stats;
   long long last=now_ms(), lastJpeg=0;
   int frames=0;
+  auto nextFrame=std::chrono::steady_clock::now();
 
   while (g_running.load()) {
     long long frameStart=now_ms();
@@ -543,15 +562,29 @@ static void renderer() {
       continue;
     }
     // bounds: only render if origin sane (grid cells cap)
-    std::fill(stats.col_min, stats.col_min + std::min(W,4096), MAX_DIST);
+    const int cols = std::min(W,4096);
+    std::fill(stats.col_min, stats.col_min + cols, MAX_DIST);
     std::lock_guard<std::mutex> wl(g_world_mtx);
     const World& world = g_world;
     if (!world.valid()) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); continue; }
-    for (int t=0;t<hw;++t) {
-      int y0=H*t/hw, y1=H*(t+1)/hw;
-      pool[t]=std::thread([&,y0,y1]{ renderBand(world, pose, fb, W, H, y0, y1, stats); });
+    {
+      std::atomic<int> next_strip{0};
+      const int stripH=4, nstrips=(H+stripH-1)/stripH;
+      std::mutex stats_mtx;
+      auto worker=[&]{
+        std::vector<float> local((size_t)cols, MAX_DIST);
+        for (;;) {
+          int si=next_strip.fetch_add(1);
+          if (si>=nstrips) break;
+          int y0=si*stripH, y1=std::min(H,y0+stripH);
+          renderBand(world, pose, fb, W, H, y0, y1, local.data());
+        }
+        std::lock_guard<std::mutex> lk(stats_mtx);
+        for (int x=0;x<cols;++x) if (local[x] < stats.col_min[x]) stats.col_min[x]=local[x];
+      };
+      for (int t=0;t<hw;++t) pool[t]=std::thread(worker);
+      for (auto& th : pool) th.join();
     }
-    for (auto& th : pool) th.join();
     drawEntities(fb.data(), W, H, pose);
     // swap framebuffer
     { std::lock_guard<std::mutex> lk(g_fb_mtx); g_fb_a.swap(fb); g_ready=&g_fb_a; }
@@ -562,19 +595,22 @@ static void renderer() {
     // jpeg for stream
     long long t=now_ms();
     if (STREAM_FPS>0 && t-lastJpeg >= 1000/STREAM_FPS) {
-      std::vector<uint8_t> snapshot;
-      { std::lock_guard<std::mutex> lk(g_fb_mtx); if (g_ready) snapshot=*g_ready; }
-      if (!snapshot.empty()) {
-        std::vector<uint8_t> j=encodeJpeg(snapshot, W, H, JPEG_QUALITY);
-        std::lock_guard<std::mutex> lk(g_jpeg_mtx); g_jpeg.swap(j); g_jpeg_seq.fetch_add(1);
+      if (g_stream_clients.load() > 0) {
+        std::vector<uint8_t> snapshot;
+        { std::lock_guard<std::mutex> lk(g_fb_mtx); if (g_ready) snapshot=*g_ready; }
+        if (!snapshot.empty()) {
+          { std::lock_guard<std::mutex> lk(g_enc_mtx); g_enc_in.swap(snapshot); g_enc_w=W; g_enc_h=H; g_enc_q=JPEG_QUALITY; g_enc_pending=true; }
+          g_enc_cv.notify_one();
+        }
       }
       lastJpeg=t;
     }
     if (t-last >= 1000) { g_fps.store((int)(frames*1000/(t-last))); frames=0; last=t; }
-    // frame pacing
-    long long spent=now_ms()-frameStart;
-    long long budget=1000/std::max(1,RENDER_FPS);
-    if (spent<budget) std::this_thread::sleep_for(std::chrono::milliseconds(budget-spent));
+    // frame pacing: absolute deadlines, no cumulative sleep drift
+    nextFrame += std::chrono::microseconds(1000000/std::max(1,RENDER_FPS));
+    auto nowc=std::chrono::steady_clock::now();
+    if (nextFrame>nowc) std::this_thread::sleep_until(nextFrame);
+    else nextFrame=nowc;
   }
 }
 
@@ -588,7 +624,10 @@ static void httpReply(int fd,int code,const char* ct,const uint8_t* body,size_t 
   sendall(fd,(uint8_t*)head,(size_t)n);
   if(body && len) sendall(fd,body,len);
 }
+struct StreamClient { StreamClient(){g_stream_clients.fetch_add(1);} ~StreamClient(){g_stream_clients.fetch_sub(1);} };
+
 static void httpStream(int fd) {
+  StreamClient client;
   const char* hdr =
     "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n"
     "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
@@ -688,7 +727,7 @@ static void bench(double seconds) {
   while (std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count() < seconds) {
     std::fill(st.col_min, st.col_min+std::min(W,4096), MAX_DIST);
     for (int t=0;t<hw;++t) { int y0=H*t/hw,y1=H*(t+1)/hw;
-      pool[t]=std::thread([&,y0,y1]{ renderBand(w,p,fb,W,H,y0,y1,st); }); }
+      pool[t]=std::thread([&,y0,y1]{ renderBand(w,p,fb,W,H,y0,y1,st.col_min); }); }
     for (auto& th:pool) th.join();
     frames++;
   }
@@ -705,7 +744,7 @@ static int selftest() {
   int hw=THREADS>0?THREADS:2; if(hw>4)hw=4;
   std::vector<std::thread> pool(hw);
   for (int t=0;t<hw;++t){ int y0=H*t/hw,y1=H*(t+1)/hw;
-    pool[t]=std::thread([&,y0,y1]{ renderBand(w,p,fb,W,H,y0,y1,st); }); }
+    pool[t]=std::thread([&,y0,y1]{ renderBand(w,p,fb,W,H,y0,y1,st.col_min); }); }
   for (auto& th:pool) th.join();
   drawEntities(fb.data(),W,H,p);
   int distinct=0, first=fb.empty()?-1:fb[0], sky=0, solid=0;
@@ -758,6 +797,7 @@ int main(int argc,char**argv){
          RES_W,RES_H,RENDER_FPS,STREAM_FPS,THREADS,FRAME_HOST.c_str(),FRAME_PORT,HTTP_PORT,MOCK?1:0);
   fflush(stdout);
   std::thread(httpServer).detach();
+  std::thread(encoderLoop).detach();
   std::thread(renderer).detach();
   if (!MOCK) {
     std::thread(frameClient).detach();

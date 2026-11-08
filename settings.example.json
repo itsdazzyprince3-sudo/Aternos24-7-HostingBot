@@ -154,7 +154,8 @@
     "w": 64,
     "h": 48,
     "d": 64,
-    "tickHz": 20
+    "tickHz": 20,
+    "threads": 8
   },
   "vision": {
     "enabled": false,
