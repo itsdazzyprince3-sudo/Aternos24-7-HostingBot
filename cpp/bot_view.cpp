@@ -387,7 +387,7 @@ static void frameClient() {
           int rx=rdI16(p), ry=rdI16(p+2), rz=rdI16(p+4);
           setKind(g_world, rx, ry, rz, p[6]);
         }
-      } else if (!memcmp(head, "VFRM", 4) && len >= 23) {
+      } else if (!memcmp(head, "VFRM", 4) && len >= 22) {
         Pose np;
         np.eye[0]=rdF32(payload.data()); np.eye[1]=rdF32(payload.data()+4); np.eye[2]=rdF32(payload.data()+8);
         np.yaw=rdF32(payload.data()+12); np.pitch=rdF32(payload.data()+16);

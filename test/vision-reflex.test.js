@@ -27,8 +27,8 @@ test('reflex walks forward on open ground', () => {
 });
 
 test('reflex steers around an obstacle toward the freer side', () => {
-  assert.equal(reflexAction(perception({ forwardClear: 0.6, freeLeft: 40, freeRight: 10 })), 'turn_left');
-  assert.equal(reflexAction(perception({ forwardClear: 0.6, freeLeft: 5, freeRight: 60 })), 'turn_right');
+  assert.equal(reflexAction(perception({ forwardClear: 0.6, freeCenter: 20, freeLeft: 60, freeRight: 10 })), 'turn_left');
+  assert.equal(reflexAction(perception({ forwardClear: 0.6, freeCenter: 20, freeLeft: 5, freeRight: 60 })), 'turn_right');
 });
 
 test('reflex refrains from walking off the spawn platform into the void', () => {
