@@ -3,6 +3,7 @@
 require('./lib/protocol-compat');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const mineflayer = require('mineflayer');
 const { Movements, pathfinder, goals } = require('mineflayer-pathfinder');
 const { GoalBlock, GoalNearXZ } = goals;
@@ -1983,6 +1984,13 @@ function chatModule(bot) {
               const st = visionController ? visionController.status() : { enabled: false };
               sendAIChatMessage(`Vision control ${st.enabled ? 'ON' : 'off'} (model ${st.model || '?'}, ticks ${st.ticks || 0}, last ${st.lastAction || 'none'}). Say !ai vision on/off.`);
             }
+          } else if (aiCommand.type === 'sygget') {
+            const syggetTask = (aiCommand.text || '').trim();
+            const target = syggetTask && !/^(?:me|set me|make me)$/i.test(syggetTask)
+              ? syggetTask
+              : AUTONOMOUS_INSTRUCTION;
+            aiAgent.start(target, username);
+            sendAIChatMessage(`${username}: Sygget engaged — working on that now. Use !ai status to check progress.`);
           } else {
             const isQuestion = /\?$/.test(aiCommand.text) ||
               /^(?:who|what|how|why|when|where|which|can|could|would|will|is|are|does|do|did|tell|joke|calc|calculate|recipe|status|help)\b/i.test(aiCommand.text);
@@ -2162,9 +2170,54 @@ function shutdown(signal) {
     }
     bot = null;
   }
+  // Clean up the force-stop marker file
+  try {
+    const dir = getForceStopDir();
+    const markerFile = path.join(dir, 'force-stop.marker');
+    const logFile = path.join(dir, 'force-stop.log');
+    if (fs.existsSync(markerFile)) fs.unlinkSync(markerFile);
+    if (fs.existsSync(logFile)) fs.unlinkSync(logFile);
+  } catch (e) {
+    // ignore cleanup errors
+  }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();
 }
+
+// ── Force-stop marker file (cross-device/terminal stop) ────────────────────
+// scripts/fs.js writes a marker file to the bot's state folder; this function
+// checks for it every 10s and shuts down all sessions when triggered.
+const FORCE_STOP_INTERVAL_MS = 10000;
+let forceStopDetected = false;
+
+function getForceStopDir() {
+  const isWin = process.platform === 'win32';
+  const homeDir = os.homedir();
+  const appData = process.env.APPDATA || (isWin ? path.join(homeDir, 'AppData', 'Roaming') : null);
+  return (appData || path.join(homeDir, '.config', 'minecraft-afk-bot', 'state'));
+}
+
+function checkForceStop() {
+  const dir = getForceStopDir();
+  const markerFile = path.join(dir, 'force-stop.marker');
+  const logFile = path.join(dir, 'force-stop.log');
+  try {
+    if (fs.existsSync(markerFile)) {
+      const record = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
+      if (!forceStopDetected) {
+        forceStopDetected = true;
+        console.log(`[FS] Force-stop marker detected from ${record.who} (location=${record.location}, pid=${record.pid}, ${record.timestamp})`);
+        if (logFile && fs.existsSync(logFile)) {
+          console.log(`[FS] Full log: ${logFile}`);
+        }
+        shutdown('SIGINT: force-stop marker');
+      }
+    }
+  } catch (err) {
+    // ignore read errors
+  }
+}
+activeIntervals.push(setInterval(checkForceStop, FORCE_STOP_INTERVAL_MS).unref());
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
