@@ -356,6 +356,17 @@ app.get('/', (req, res) => {
             <textarea id="instruction" maxlength="500" placeholder="Mine enough stone for a furnace"></textarea>
             <button class="btn" id="submit-instruction" type="button">Start instruction</button>
             <button class="btn" id="stop-instruction" type="button">Stop</button>
+            <div style="margin-top:12px;">
+              <div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">Quick AI Macros:</div>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
+                <button class="control-key macro-btn" type="button" data-macro="guard me">🛡️ Guard Me</button>
+                <button class="control-key macro-btn" type="button" data-macro="sort chests">📦 Sort Chests</button>
+                <button class="control-key macro-btn" type="button" data-macro="inspect storage">🔍 Index Storage</button>
+                <button class="control-key macro-btn" type="button" data-macro="farm">🌾 Auto Farm & Bread</button>
+                <button class="control-key macro-btn" type="button" data-macro="build tower">🏰 Build Tower</button>
+                <button class="control-key macro-btn" type="button" data-macro="strip mine 16">⛏️ Strip Mine 16</button>
+              </div>
+            </div>
             <p class="ai-status" id="ai-status">Enter your dashboard control token to view task status.</p>
           </div>
           <a href="/tutorial" class="btn">View Setup Guide</a>
@@ -619,6 +630,19 @@ app.get('/', (req, res) => {
             dashboardTokenInput.addEventListener('change', refreshAIStatus);
             setInterval(refreshAIStatus, 5000);
           }
+
+          const macroButtons = [...document.querySelectorAll('[data-macro]')];
+          macroButtons.forEach(btn => {
+            btn.addEventListener('click', async () => {
+              if (instructionInput) instructionInput.value = btn.dataset.macro;
+              try {
+                const res = await aiRequest('/api/instruction', { instruction: btn.dataset.macro });
+                aiStatus.innerText = res.message + ' (' + res.status + ')';
+              } catch (err) {
+                aiStatus.innerText = err.message;
+              }
+            });
+          });
 
           const radarCanvas = document.getElementById('radar-canvas');
           const radarCtx = radarCanvas ? radarCanvas.getContext('2d') : null;
@@ -1335,6 +1359,36 @@ function createBot() {
       defaultMove.fallDamageCost = 1000;
 
       initializeModules(bot, mcData, defaultMove, authPassword);
+
+      let mlgClutchActive = false;
+      bot.on('physicTick', async () => {
+        if (!bot || !bot.entity || mlgClutchActive) return;
+        const velY = bot.entity.velocity ? bot.entity.velocity.y : 0;
+        if (velY < -0.65 && !bot.entity.isInWater && !bot.entity.isInLava) {
+          const inv = bot.inventory?.items ? bot.inventory.items() : [];
+          const waterBucket = inv.find(it => it.name === 'water_bucket');
+          if (waterBucket) {
+            const feetPos = bot.entity.position;
+            const ground = bot.blockAt ? bot.blockAt(feetPos.offset(0, -1, 0)) : null;
+            if (ground && ground.boundingBox === 'block' && ground.name !== 'air') {
+              mlgClutchActive = true;
+              try {
+                if (typeof bot.equip === 'function') await bot.equip(waterBucket, 'hand');
+                if (typeof bot.look === 'function') await bot.look(bot.entity.yaw, -Math.PI / 2, true);
+                if (typeof bot.activateItem === 'function') bot.activateItem();
+                setTimeout(() => {
+                  try {
+                    if (typeof bot.activateItem === 'function') bot.activateItem();
+                  } catch {}
+                  mlgClutchActive = false;
+                }, 400);
+              } catch {
+                mlgClutchActive = false;
+              }
+            }
+          }
+        }
+      });
 
       setTimeout(() => {
         if (bot && botState.connected && !config.ai?.enabled && config.server['try-creative']) {

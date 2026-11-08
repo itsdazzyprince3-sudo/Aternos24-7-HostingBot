@@ -131,3 +131,16 @@ test('index.js passes full JavaScript syntax compilation without errors', () => 
   assert.ok(code.includes('econnrefused'));
   assert.ok(code.includes('econnreset'));
 });
+
+test('all critical lib files pass JavaScript syntax compilation without errors', () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const files = ['ai-skills.js', 'ai-agent.js', 'ai-brain.js', 'ai-memory.js'];
+  for (const f of files) {
+    const code = fs.readFileSync(path.join(__dirname, '..', 'lib', f), 'utf8');
+    assert.doesNotThrow(() => {
+      new vm.Script(code, { filename: f });
+    }, `Syntax check failed for ${f}`);
+  }
+});
