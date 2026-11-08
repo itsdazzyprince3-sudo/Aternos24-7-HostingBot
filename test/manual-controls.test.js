@@ -124,8 +124,12 @@ test('index.js passes full JavaScript syntax compilation without errors', () => 
     new vm.Script(code, { filename: 'index.js' });
   });
 
-  // Verify server offline keywords and reconnection warning logic exist
+  // Verify server offline keywords, kick formatting, safe chat queue, digging ability, and reconnection warning logic exist
   assert.ok(code.includes('isServerOfflineError'));
+  assert.ok(code.includes('formatKickReason'));
+  assert.ok(code.includes('enqueueSafeChat'));
+  assert.ok(code.includes('physicsTick'));
+  assert.ok(code.includes('defaultMove.canDig = true'));
   assert.ok(code.includes('offline-warning-card'));
   assert.ok(code.includes('Minecraft Server is Offline!'));
   assert.ok(code.includes('econnrefused'));

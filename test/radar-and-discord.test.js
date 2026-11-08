@@ -136,3 +136,22 @@ test('saturation-aware eat prioritizes golden apple when wounded and cooked beef
   assert.match(res.message, /golden apple/i);
   assert.equal(consumed[0], 'golden_apple');
 });
+
+test('pro AI parses coordinate navigation intents', () => {
+  const { parseLocalIntent, planForIntent } = require('../lib/ai-brain');
+
+  const p1 = parseLocalIntent('come 15 42 -10');
+  assert.equal(p1.type, 'gotoCoords');
+  assert.equal(p1.x, 15);
+  assert.equal(p1.y, 42);
+  assert.equal(p1.z, -10);
+
+  const p2 = parseLocalIntent('goto -100 64 250');
+  assert.equal(p2.type, 'gotoCoords');
+  assert.equal(p2.x, -100);
+  assert.equal(p2.y, 64);
+  assert.equal(p2.z, 250);
+
+  const plan = planForIntent(p1);
+  assert.deepEqual(plan, [{ skill: 'gotoCoordinates', args: { x: 15, y: 42, z: -10 } }]);
+});
