@@ -134,38 +134,99 @@ const aiAgent = new AIAgent({
 
 pluginLoader.init({ config, aiAgent });
 
-// First-person C++ viewer bridge (opt-in). Start the bot with BOT_VIEW=1 and run
-// ./cpp/bot_view, then open http://127.0.0.1:8080/ to see the bot's first-person view.
-const viewFrameServer = (process.env.BOT_VIEW === '1' || config.view?.enabled === true)
+// First-person viewer bridge (opt-in): the C++ renderer draws what the bot sees
+// and sends back PERC, a compact perception summary the reflex layer plays from.
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const viewEnabled = process.env.BOT_VIEW === '1' || config.view?.enabled === true;
+const viewConfig = config.view || {};
+const viewFrameServer = viewEnabled
   ? new FrameServer({
       getBot: () => bot,
       isConnected: () => botState.connected,
-      port: Number(process.env.VIEW_FRAME_PORT) || config.view?.port || 31337,
-      w: Number(process.env.VIEW_W) || config.view?.w || 64,
-      h: Number(process.env.VIEW_H) || config.view?.h || 48,
-      d: Number(process.env.VIEW_D) || config.view?.d || 64,
-      fps: Number(process.env.VIEW_FPS) || config.view?.fps || 6
+      port: Number(process.env.VIEW_FRAME_PORT) || viewConfig.port || 31337,
+      w: Number(process.env.VIEW_W) || viewConfig.w || 64,
+      h: Number(process.env.VIEW_H) || viewConfig.h || 48,
+      d: Number(process.env.VIEW_D) || viewConfig.d || 64,
+      tickHz: Number(process.env.VIEW_TICK_HZ) || viewConfig.tickHz || 20
     })
   : null;
-if (viewFrameServer) viewFrameServer.start();
+if (viewFrameServer) {
+  viewFrameServer.on('perception', (perception) => {
+    if (bot) bot.aiPerception = perception;
+  });
+  viewFrameServer.start();
+}
 
-// Vision-control loop: bot watches its rendered view and a vision model picks
-// actions. Needs the C++ viewer running (BOT_VIEW=1). Toggle in-game: !ai vision on/off.
+// Spawn the C++ viewer alongside the bot unless told not to. It reconnects to
+// the frame server by itself; we only restart it if the process dies.
+let viewerProcess = null;
+let viewerRestarts = 0;
+let viewerStartedAt = 0;
+function startViewerProcess() {
+  if (!viewEnabled || viewConfig.spawn === false || viewerProcess) return;
+  const binary = path.join(__dirname, viewConfig.binary || 'cpp/bot_view');
+  if (!fs.existsSync(binary)) {
+    console.log('[View] viewer binary missing - build with: g++ -O2 -std=c++17 -pthread cpp/bot_view.cpp -o cpp/bot_view');
+    return;
+  }
+  const args = [
+    '--frame-port', String(viewFrameServer ? viewFrameServer.port : 31337),
+    '--http-port', String(Number(process.env.VIEW_HTTP_PORT) || viewConfig.httpPort || 8080),
+    '--w', String(Number(process.env.VIEW_RENDER_W) || viewConfig.renderWidth || 320),
+    '--h', String(Number(process.env.VIEW_RENDER_H) || viewConfig.renderHeight || 180),
+    '--fps', String(Number(process.env.VIEW_RENDER_FPS) || viewConfig.renderFps || 60),
+    '--stream-fps', String(Number(process.env.VIEW_STREAM_FPS) || viewConfig.streamFps || 30),
+    '--quality', String(Number(process.env.VIEW_QUALITY) || viewConfig.quality || 70)
+  ];
+  if (viewConfig.threads || process.env.VIEW_THREADS) {
+    args.push('--threads', String(Number(process.env.VIEW_THREADS) || viewConfig.threads));
+  }
+  try {
+    viewerProcess = spawn(binary, args, { stdio: 'inherit' });
+    viewerStartedAt = Date.now();
+    console.log(`[View] viewer started (${args.join(' ')})`);
+  } catch (err) {
+    console.log(`[View] could not start viewer: ${err.message}`);
+    return;
+  }
+  viewerProcess.on('exit', (code, signal) => {
+    viewerProcess = null;
+    if (isShuttingDown) return;
+    const ranFor = Date.now() - viewerStartedAt;
+    viewerRestarts = ranFor > 30000 ? 1 : viewerRestarts + 1;
+    if (viewerRestarts > 5) {
+      console.log(`[View] viewer exited (${code ?? signal}) repeatedly; not restarting. Build it with cpp/README.md.`);
+      return;
+    }
+    console.log(`[View] viewer exited (${code ?? signal}); restarting in 3s`);
+    setTimeout(startViewerProcess, 3000).unref?.();
+  });
+}
+if (viewEnabled) startViewerProcess();
+
+// Vision control: reflex layer plays from PERC in real time; the LLM layer is
+// opt-in (config.vision.llm or VISION_LLM=1) because it is slow on CPU hosts.
+// Toggle in-game: !ai vision on/off.
 function createVisionController() {
   return new VisionController({
     getBot: () => bot,
     isConnected: () => botState.connected,
-    viewerUrl: process.env.VIEWER_URL || config.vision?.viewerUrl || 'http://127.0.0.1:8080',
+    getPerception: viewFrameServer ? () => viewFrameServer.lastPerception : null,
+    viewerUrl: process.env.VIEWER_URL || viewConfig.url || 'http://127.0.0.1:8080',
     ollamaUrl: process.env.OLLAMA_URL || config.ai?.ollama?.url || 'http://127.0.0.1:11434/api/chat',
     model: process.env.VISION_MODEL || config.vision?.model || 'llava',
     intervalMs: Number(process.env.VISION_INTERVAL) || config.vision?.intervalMs || 4000,
+    reflexHz: Number(process.env.VISION_REFLEX_HZ) || config.vision?.reflexHz || 10,
+    reflex: process.env.VISION_REFLEX !== '0' && config.vision?.reflex !== false,
+    llm: process.env.VISION_LLM === '1' || config.vision?.llm === true,
     dryRun: process.env.VISION_DRY === '1' || config.vision?.dryRun === true,
     enabled: true,
     onLog: (m) => console.log(`[Vision] ${m}`)
   });
 }
 let visionController = null;
-if (process.env.BOT_VISION === '1' || config.vision?.enabled === true) {
+if (viewEnabled || config.vision?.enabled === true) {
   visionController = createVisionController();
   visionController.start();
 }
@@ -2333,6 +2394,9 @@ function shutdown(signal) {
   clearBotTimeouts();
   clearAllIntervals();
   clearBlockAtGuard();
+  try { if (visionController) visionController.stop(); } catch { /* ignore */ }
+  try { if (viewFrameServer) viewFrameServer.stop(); } catch { /* ignore */ }
+  try { if (viewerProcess) { viewerProcess.kill(); viewerProcess = null; } } catch { /* ignore */ }
   if (bot) {
     try {
       manualControlSession.release();
